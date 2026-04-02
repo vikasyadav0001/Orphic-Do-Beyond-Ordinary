@@ -1,0 +1,61 @@
+# ================================================================
+# Project Orphic — Requirements
+# Install: pip install -r requirements.txt
+# ================================================================
+
+# ── LangGraph & LangChain (Core Agent Framework) ────────────────
+langgraph
+langchain
+langchain-core
+langchain-openai
+langchain-google-genai
+langchain-anthropic
+langchain-community
+
+# ── LLM Providers ───────────────────────────────────────────────
+openai
+google-generativeai
+anthropic
+
+# ── PostgreSQL (Production Memory & DB) ─────────────────────────
+psycopg[binary,pool]       # async PostgreSQL driver
+psycopg-pool               # async connection pool
+langgraph-checkpoint-postgres  # LangGraph Postgres checkpointer
+sqlalchemy[asyncio]        # ORM for user/session models
+asyncpg                    # high-performance async Postgres driver
+
+# ── Vector Memory (Long-term RAG Memory) ────────────────────────
+pgvector                   # PostgreSQL vector extension python client
+sentence-transformers      # local embedding models
+
+# ── API Framework ────────────────────────────────────────────────
+fastapi
+uvicorn[standard]          # ASGI server for FastAPI
+websockets                 # WebSocket support
+python-jose[cryptography]  # JWT auth tokens
+passlib[bcrypt]            # password hashing
+
+# ── Tools ────────────────────────────────────────────────────────
+tavily-python              # Tavily web search
+beautifulsoup4             # web scraping
+requests
+httpx                      # async HTTP client
+
+# ── MCP Protocol ─────────────────────────────────────────────────
+mcp                        # Model Context Protocol SDK
+fastmcp
+
+# ── Observability & Logging ──────────────────────────────────────
+langsmith                  # LangChain tracing & observability
+python-dotenv              # .env file loading
+structlog                  # structured logging
+
+# ── Testing ──────────────────────────────────────────────────────
+pytest
+pytest-asyncio
+httpx                      # for FastAPI test client
+
+# ── Utilities ────────────────────────────────────────────────────
+pydantic                   # data validation & settings
+pyyaml                     # YAML config loading
+tiktoken                   # OpenAI token counting

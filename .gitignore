@@ -1,0 +1,65 @@
+# ===================== Python =====================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ===================== Virtual Environment =====================
+venv/
+.venv/
+env/
+.env.local
+
+# ===================== Environment Variables (SECRETS) =====================
+.env
+.env.*
+!.env.example        # keep the example template, never the real .env
+
+# ===================== Databases =====================
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# ===================== Data (large files, generated) =====================
+data/embeddings/
+data/raw/
+data/transcripts/
+*.npy
+*.pkl
+*.parquet
+
+# ===================== Logs & Traces =====================
+*.log
+logs/
+traces/
+
+# ===================== IDE & Editor =====================
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===================== Testing & Coverage =====================
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# ===================== Node / Frontend (future) =====================
+node_modules/
+frontend/dist/
+frontend/.next/
+frontend/build/
+
+# ===================== Docker =====================
+*.env.docker
+docker-compose.override.yml
