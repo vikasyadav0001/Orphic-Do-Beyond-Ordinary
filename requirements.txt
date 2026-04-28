@@ -44,6 +44,7 @@ httpx                      # async HTTP client
 # ── MCP Protocol ─────────────────────────────────────────────────
 mcp                        # Model Context Protocol SDK
 fastmcp
+langchain_mcp_adapters
 
 # ── Observability & Logging ──────────────────────────────────────
 langsmith                  # LangChain tracing & observability
@@ -57,5 +58,4 @@ httpx                      # for FastAPI test client
 
 # ── Utilities ────────────────────────────────────────────────────
 pydantic                   # data validation & settings
-pyyaml                     # YAML config loading
 tiktoken                   # OpenAI token counting
