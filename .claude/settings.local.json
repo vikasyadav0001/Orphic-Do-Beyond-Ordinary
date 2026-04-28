@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python:*)",
-      "Bash(curl -sI \"https://server.smithery.ai/@modelcontextprotocol/server-github/mcp\")"
-    ]
-  }
-}
