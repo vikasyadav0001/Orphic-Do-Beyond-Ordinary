@@ -1,8 +1,10 @@
+<img width="2816" height="1536" alt="image" src="https://github.com/user-attachments/assets/9560abd9-7559-4e72-93ae-292c45486d63" />
+
 # Orphic — AI Agent That Does Beyond Ordinary
 
 An AI agent that can talk to you, remember things about you, and take actions on your behalf — like creating GitHub repos, managing Notion pages, searching the web, and more.
 
----
+
 
 ## What It Does
 
