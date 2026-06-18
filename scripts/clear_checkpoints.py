@@ -22,14 +22,11 @@ import asyncio
 import sys
 import os
 from psycopg_pool import AsyncConnectionPool
-from dotenv import load_dotenv
+from config import get_settings
 
-load_dotenv()
+settings = get_settings()
+DB_URI = settings.db_url
 
-DB_URI = os.getenv("DATABASE_URL")
-if not DB_URI:
-    print("❌ DATABASE_URL not found in .env — aborting.")
-    sys.exit(1)
 
 
 async def clear_threads(thread_ids: list[str] | None):

@@ -7,19 +7,19 @@ npx, uvx, subprocesses. Just a URL + token.while for notion bridge remote server
 
 """
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from dotenv import load_dotenv
+from config import get_settings
 import os
 from utils.logger import get_logger
 import asyncio
-load_dotenv()
 
+settings = get_settings()
 logger = get_logger(__name__)
 
-# Validate required tokens
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
-EXA_API_KEY = os.getenv("EXA_API_KEY")
-NOTION_TOKEN = os.getenv('NOTION_TOKEN')
+# Retrieve tokens from settings
+GITHUB_TOKEN = settings.github_token
+FIRECRAWL_API_KEY = settings.firecrawl_api_key
+EXA_API_KEY = settings.exa_api_key
+NOTION_TOKEN = settings.notion_token
 
 missing = [k for k, v in {
     "GITHUB_TOKEN": GITHUB_TOKEN,

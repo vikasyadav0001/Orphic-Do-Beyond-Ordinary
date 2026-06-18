@@ -1,18 +1,13 @@
-import os
 from psycopg_pool import AsyncConnectionPool
 from psycopg.rows import dict_row
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from dotenv import load_dotenv
+from config import get_settings
 from utils.logger import get_logger
 
-load_dotenv()
+settings = get_settings()
+DB_URI = settings.db_url
 
 logger = get_logger(__name__)
-
-DB_URI = os.getenv("DATABASE_URL")
-
-if not DB_URI:
-    raise ValueError("DATABASE_URL environment variable is required")
 
 pool = AsyncConnectionPool(
     conninfo=DB_URI,

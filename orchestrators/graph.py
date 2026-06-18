@@ -1,31 +1,34 @@
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from memory.graph_checkpointer import pool, setup_db
 from protocols.mcp.remote_mcp_client_config import get_mcp_tools
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from dotenv import load_dotenv
 from memory.long_term_memory import setup_memory_store, retrieve_memory
 from prompts.system_persona_prompt import get_prompt
 from middleware.memory_middleware import MemoryMiddleware
 from langchain.agents.middleware import SummarizationMiddleware
+from tools.custom_tools import custom_tools
 from utils.logger import get_logger
-import os
+from dotenv import load_dotenv
+from config import get_settings
 
-load_dotenv()
+settings = get_settings()
 logger = get_logger(__name__)
-
-# Validate OpenAI API key
-if not os.getenv("OPENAI_API_KEY"):
-    raise ValueError("OPENAI_API_KEY environment variable is required")
 
 # LLM — module level (instantiated once, reused across requests)
 try:
-    llm = ChatOpenAI(model='gpt-5-nano', streaming=True)
+    llm = ChatOpenAI(model='gpt-5-nano', api_key=settings.openai_api_key, streaming=True)
 except Exception as e:
     logger.error(f"Failed to initialize LLM: {e}")
     raise
 
+try:
+    summarization_llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", api_key=settings.groq_api_key)
+except Exception as e:
+    logger.error(f"Failed to initialize Summarization Model: {e}")
+    raise
 
 # Lazy bot — created once on first request, reused after
 _bot = None
@@ -49,21 +52,23 @@ async def get_bot():
         checkpointer = AsyncPostgresSaver(pool)
 
         try:
-            mcp_tools = await get_mcp_tools()     # load tools from MCP servers
+            mcp_tools = await get_mcp_tools()
             logger.info(f"Loaded {len(mcp_tools)} MCP tools")
         except Exception as e:
             logger.warning(f"MCP tools loading failed, continuing without tools: {e}")
             mcp_tools = []
 
+        all_tools = mcp_tools + custom_tools
+
         _bot = create_agent(
             model=llm,
-            tools=mcp_tools,
+            tools=all_tools,
             checkpointer=checkpointer,
             store=store,
             middleware=[
                 MemoryMiddleware(user_id="default_user"),
                 SummarizationMiddleware(
-                    model="gpt-4o-mini",
+                    model=summarization_llm,
                     trigger=("tokens", 4000),
                     keep=("messages", 10)
                 )
@@ -76,7 +81,7 @@ async def get_bot():
         raise RuntimeError(f"Agent initialization failed: {e}") from e
 
 
-async def stream_response(user_message: str, thread_id: str):
+async def stream_response(user_message: str, thread_id: str, user_id:str):
     """
     Async generator that streams individual tokens from the ReAct agent.
     Thread ID scopes memory to a specific conversation.
@@ -89,8 +94,8 @@ async def stream_response(user_message: str, thread_id: str):
         return
 
     config = {
-        'configurable': {"thread_id": thread_id},
-        'metadata': {"thread_id": thread_id},
+        'configurable': {"thread_id": thread_id, "user_id": user_id},
+        'metadata': {"thread_id": thread_id, "user_id": user_id},
         "run_name": "chat_turn"
     }
 
