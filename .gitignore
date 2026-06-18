@@ -63,3 +63,13 @@ frontend/build/
 # ===================== Docker =====================
 *.env.docker
 docker-compose.override.yml
+
+#others
+doc_image_pipeline_flow.png
+image.png
+
+# Ignore all files inside the uploads directory
+uploads/*
+
+# Exception: Keep the directory structure tracked via a hidden file
+!uploads/.gitkeep

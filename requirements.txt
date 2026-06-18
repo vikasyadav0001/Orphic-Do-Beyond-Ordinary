@@ -11,11 +11,8 @@ langchain-openai
 langchain-google-genai
 langchain-anthropic
 langchain-community
+langchain-groq
 
-# ── LLM Providers ───────────────────────────────────────────────
-openai
-google-generativeai
-anthropic
 
 # ── PostgreSQL (Production Memory & DB) ─────────────────────────
 psycopg[binary,pool]       # async PostgreSQL driver

@@ -31,7 +31,7 @@ async def main():
             #stream the response
             full_response = ""
             try:
-                async for token in stream_response(user_input, thread_id):
+                async for token in stream_response(user_input, thread_id, user_id):
                     print(token, end="", flush=True)
                     full_response += token
                 print()

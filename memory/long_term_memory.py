@@ -1,24 +1,19 @@
-import os
 from psycopg_pool import AsyncConnectionPool
 from langgraph.store.postgres import AsyncPostgresStore
 from langchain_openai import OpenAIEmbeddings
-from dotenv import load_dotenv
+from config import get_settings
 from memory.graph_checkpointer import pool
 from uuid import uuid4
 from datetime import datetime
 from utils.logger import get_logger
 
-load_dotenv()
+settings = get_settings()
+DATABASE_URL = settings.db_url
 
 logger = get_logger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is required")
-
 try:
-    embedding_model = OpenAIEmbeddings(model='text-embedding-3-small')
+    embedding_model = OpenAIEmbeddings(model='text-embedding-3-small', api_key=settings.openai_api_key)
 except Exception as e:
     logger.error(f"Failed to initialize embedding model: {e}")
     raise
