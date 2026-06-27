@@ -49,7 +49,7 @@ def extract_preview(file_path: str, max_tokens:int = 1000) -> str:
         
         elif ext == "csv":
             df = pd.read_csv(file_path)
-            preview = f"Columns: {df.columns.tolist()}\n{df.head(10).to_string()}"
+            preview_text = f"Columns: {df.columns.tolist()}\n{df.head(10).to_string()}"
 
         elif ext in ["xlsx", "xls"]:
             df = pd.read_excel(file_path)

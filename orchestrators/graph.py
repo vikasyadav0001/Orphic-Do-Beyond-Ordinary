@@ -10,6 +10,7 @@ from prompts.system_persona_prompt import get_prompt
 from middleware.memory_middleware import MemoryMiddleware
 from langchain.agents.middleware import SummarizationMiddleware
 from tools.custom_tools import custom_tools
+from schemas.context import UserContext
 from utils.logger import get_logger
 from dotenv import load_dotenv
 from config import get_settings
@@ -59,14 +60,14 @@ async def get_bot():
             mcp_tools = []
 
         all_tools = mcp_tools + custom_tools
-
         _bot = create_agent(
             model=llm,
             tools=all_tools,
             checkpointer=checkpointer,
             store=store,
+            context_schema=UserContext,
             middleware=[
-                MemoryMiddleware(user_id="default_user"),
+                MemoryMiddleware(),
                 SummarizationMiddleware(
                     model=summarization_llm,
                     trigger=("tokens", 4000),
@@ -81,11 +82,7 @@ async def get_bot():
         raise RuntimeError(f"Agent initialization failed: {e}") from e
 
 
-async def stream_response(user_message: str, thread_id: str, user_id:str):
-    """
-    Async generator that streams individual tokens from the ReAct agent.
-    Thread ID scopes memory to a specific conversation.
-    """
+async def stream_response(user_message: str, thread_id: str, user_id: str):
     try:
         bot = await get_bot()
     except Exception as e:
@@ -94,26 +91,64 @@ async def stream_response(user_message: str, thread_id: str, user_id:str):
         return
 
     config = {
-        'configurable': {"thread_id": thread_id, "user_id": user_id},
-        'metadata': {"thread_id": thread_id, "user_id": user_id},
+        "configurable": {"thread_id": thread_id, "user_id": user_id},
         "run_name": "chat_turn"
     }
 
     try:
-        async for event in bot.astream_events(
+        async for message, metadata in bot.astream(
             {"messages": [HumanMessage(content=user_message)]},
             config=config,
-            version='v2'
+            context=UserContext(user_id=user_id),
+            stream_mode="messages",
         ):
-            try:
-                if (event['event'] == 'on_chat_model_stream' and event.get('metadata', {}).get('langgraph_node') == 'model'):
-                    # print(f"DEBUG NODE: {event.get('metadata', {}).get('langgraph_node')}", flush=True)
-                    chunk = event['data'].get('chunk')
-                    if chunk and hasattr(chunk, 'content') and chunk.content:
-                        yield chunk.content
-            except Exception as e:
-                logger.error(f"Error processing event chunk: {e}")
-                continue
+            if (
+                metadata.get("langgraph_node") == "model"
+                and hasattr(message, "content")
+                and message.content
+            ):
+                yield message.content
     except Exception as e:
-        logger.error(f"Streaming error: {e}")
+        logger.error(f"Streaming error: {e}", exc_info=True)
         yield "\n\n[Sorry, an error occurred. Please try again.]"
+
+
+
+
+
+# async def stream_response(user_message: str, thread_id: str, user_id:str):
+#     """
+#     Async generator that streams individual tokens from the ReAct agent.
+#     Thread ID scopes memory to a specific conversation.
+#     """
+#     try:
+#         bot = await get_bot()
+#     except Exception as e:
+#         logger.error(f"Cannot stream: Agent not initialized - {e}")
+#         yield "Sorry, I'm having trouble starting up. Please try again later."
+#         return
+
+#     config = {
+#         'configurable': {"thread_id": thread_id, "user_id": user_id},
+#         'metadata': {"thread_id": thread_id, "user_id": user_id},
+#         "run_name": "chat_turn"
+#     }
+
+#     try:
+#         async for event in bot.astream_events(
+#             {"messages": [HumanMessage(content=user_message)]},
+#             config=config,
+#             version='v2'
+#         ):
+#             try:
+#                 if (event['event'] == 'on_chat_model_stream' and event.get('metadata', {}).get('langgraph_node') == 'model'):
+#                     # print(f"DEBUG NODE: {event.get('metadata', {}).get('langgraph_node')}", flush=True)
+#                     chunk = event['data'].get('chunk')
+#                     if chunk and hasattr(chunk, 'content') and chunk.content:
+#                         yield chunk.content
+#             except Exception as e:
+#                 logger.error(f"Error processing event chunk: {e}")
+#                 continue
+#     except Exception as e:
+#         logger.error(f"Streaming error: {e}")
+#         yield "\n\n[Sorry, an error occurred. Please try again.]"

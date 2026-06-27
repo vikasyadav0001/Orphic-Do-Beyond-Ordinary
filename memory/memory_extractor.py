@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 from uuid import uuid4
 from typing import List
 from pydantic import BaseModel, Field
+from functools import lru_cache
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -12,13 +13,22 @@ from langgraph.store.base import BaseStore
 import memory.long_term_memory as ltm
 from memory.long_term_memory import retrieve_memory, store_memory, setup_memory_store
 from utils.logger import get_logger
+from config import get_settings
 
-load_dotenv()
+env = get_settings()
+
 logger = get_logger(__name__)
 
 #Extractor LLM
+@lru_cache
+def get_extractor_llm() -> ChatOpenAI:
+    return ChatOpenAI(
+        model="gpt-4o-mini",
+        api_key=env.openai_api_key
+    )
+
 try:
-    extractor_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    extractor_llm = get_extractor_llm()
 except Exception as e:
     logger.error(f"Failed to initialize extractor LLM: {e}")
     raise
@@ -109,12 +119,9 @@ If NOT → discard.
 
 
 #graph start
-async def chat_create_memory_node(state: MessagesState, config: RunnableConfig, store : BaseStore):
-    try:
-        user_id = config["configurable"]["user_id"]
-    except KeyError:
-        logger.error("user_id not found in config")
-        return {}
+async def chat_create_memory_node(state: MessagesState, config: RunnableConfig, store: BaseStore):
+    user_id = config["configurable"].get("user_id", "default_user")
+    logger.debug(f"memory_extractor: running for user_id='{user_id}'")
 
     namespace = ("memories", user_id)
 

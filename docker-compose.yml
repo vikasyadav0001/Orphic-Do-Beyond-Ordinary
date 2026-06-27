@@ -1,0 +1,31 @@
+services:
+  backend:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000" # localhost only — Nginx handles public traffic
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: orphic
+      POSTGRES_PASSWORD: orphic_local_dev
+      POSTGRES_DB: orphic_db
+    ports:
+      - "127.0.0.1:5432:5432" # localhost only — no direct DB access from internet
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U orphic -d orphic_db" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:

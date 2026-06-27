@@ -15,6 +15,7 @@ env = get_settings()
 # ── Persistent dedup store ──────────────────────────────────────────
 IMAGE_CACHE_FILE = "./uploads/.image_cache.json"
 
+# Functions must be defined BEFORE they are called at module level
 def _load_cache() -> dict:
     """Load hash → analysis cache from disk."""
     if os.path.exists(IMAGE_CACHE_FILE):
@@ -33,8 +34,10 @@ def _save_cache(cache: dict) -> None:
     except Exception as e:
         logger.warning(f"Failed to persist image cache: {e}")
 
-# In-memory cache, loaded once at startup
+# In-memory cache, loaded once at startup (after _load_cache is defined)
 _image_analysis_cache: dict = _load_cache()
+_cache_lock = asyncio.Lock()
+
 
 
 @lru_cache
@@ -45,16 +48,17 @@ def get_vision_llm() -> ChatGroq:
     )
 
 
-async def analyse_image(image_path: str) -> str:
+async def analyse_image(image_path: str, user_id: str) -> tuple[str, bool]:
     if not os.path.exists(image_path):
-        return f"Error: Image path does not exist: {image_path}"
+        return f"Error: Image path does not exist: {image_path}", False  # ← always tuple
 
     # ── Dedup check ─────────────────────────────────────────────────
     file_hash = compute_hash(image_path)
+    cache_key = f"{user_id}:{file_hash}"
 
-    if file_hash in _image_analysis_cache:
+    if cache_key in _image_analysis_cache:
         logger.info(f"Image already analyzed. Returning cached result.")
-        return _image_analysis_cache[file_hash], True
+        return _image_analysis_cache[cache_key], True  # ← read with cache_key, not file_hash
 
     # ── MIME type ────────────────────────────────────────────────────
     ext = os.path.splitext(image_path)[1].lower()
@@ -95,15 +99,16 @@ async def analyse_image(image_path: str) -> str:
         result = response.content
 
         # ── Cache and persist ────────────────────────────────────────
-        _image_analysis_cache[file_hash] = result
-        _save_cache(_image_analysis_cache)
-        logger.info(f"Image analysis cached for hash {file_hash[:12]}...")
+        async with _cache_lock:
+            _image_analysis_cache[cache_key] = result
+            _save_cache(_image_analysis_cache)
+            logger.info(f"Image analysis cached for hash {file_hash[:12]}...")
 
         return result, False
 
     except Exception as e:
         logger.error(f"Error analyzing image: {e}", exc_info=True)
-        return f"Error analyzing image: {str(e)}"
+        return f"Error analyzing image: {str(e)}", False
 
 
 if __name__ == "__main__":

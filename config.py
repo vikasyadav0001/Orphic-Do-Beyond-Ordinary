@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     langsmith_project: Optional[str] = "orphic-project"
     langsmith_tracing: Optional[bool] = False
 
+    #auth settings
+    jwt_secret: str
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_minutes: int = 1440
+
     # Pydantic configuration
     model_config = SettingsConfigDict(
         env_file=".env",

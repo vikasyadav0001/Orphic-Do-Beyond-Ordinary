@@ -100,9 +100,9 @@ def route_after_entry(state: PipelineState) -> str:
 async def image_vision(state: PipelineState) -> dict:
     logger.info("=== Image Vision Node ===")
     file_path = state.get("file_path")
-
+    user_id = state.get("user_id")
     try:
-        response, is_cached = await analyse_image(file_path)
+        response, is_cached = await analyse_image(file_path, user_id)
         return {"response": response, "image_cached": is_cached}
     except Exception as e:
         logger.error(f"Image analysis failed: {e}", exc_info=True)
@@ -117,11 +117,14 @@ async def doc_analysis_node(state: PipelineState) -> dict:
 
     try:
         logger.info("Running full ingestion.")
-        get_or_create_vector_store(
+        import asyncio
+        await asyncio.to_thread(
+            get_or_create_vector_store,
             file_path=file_path,
             session_id=session_id,
             user_id=user_id,
         )
+        
         logger.info("Ingestion complete.")
         return {"vector_store_ready": True}
     except Exception as e:
@@ -170,7 +173,6 @@ if __name__ == "__main__":
     print(f"Analysis Response: {result.get('response')}")
     print(f"Vector Store Ready: {result.get('vector_store_ready')}")
     print(f"Error: {result.get('error')}")
-
 
 
 

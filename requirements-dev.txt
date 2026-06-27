@@ -1,0 +1,10 @@
+# ================================================================
+# Project Orphic — Development Requirements
+# Install: pip install -r requirements-dev.txt
+# ================================================================
+
+-r requirements.txt
+
+# ── Testing ──────────────────────────────────────────────────────
+pytest
+pytest-asyncio
