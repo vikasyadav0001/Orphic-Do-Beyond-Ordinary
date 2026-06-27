@@ -1,0 +1,8 @@
+services:
+  backend:
+    image: orphicregistry.azurecr.io/orphic-backend:latest
+    ports:
+      - "127.0.0.1:8000:8000" # localhost only — Nginx handles public traffic
+    env_file:
+      - .env
+    restart: unless-stopped
