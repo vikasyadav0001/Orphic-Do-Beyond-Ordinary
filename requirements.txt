@@ -15,28 +15,43 @@ langchain-groq
 
 
 # ── PostgreSQL (Production Memory & DB) ─────────────────────────
-psycopg[binary,pool]       # async PostgreSQL driver
+psycopg[pool]       # async PostgreSQL driver
 psycopg-pool               # async connection pool
 langgraph-checkpoint-postgres  # LangGraph Postgres checkpointer
 sqlalchemy[asyncio]        # ORM for user/session models
 asyncpg                    # high-performance async Postgres driver
+langchain-postgres
+alembic
 
 # ── Vector Memory (Long-term RAG Memory) ────────────────────────
 pgvector                   # PostgreSQL vector extension python client
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
 sentence-transformers      # local embedding models
+pymupdf
+pymupdf4llm
+langchain-pymupdf4llm
+
 
 # ── API Framework ────────────────────────────────────────────────
-fastapi
+fastapi[standard]
 uvicorn[standard]          # ASGI server for FastAPI
 websockets                 # WebSocket support
 python-jose[cryptography]  # JWT auth tokens
 passlib[bcrypt]            # password hashing
+fastapi-users[sqlalchemy]
+fastapi-users-db-sqlalchemy
+
+# ─ Production WSGI/ASGI process manager ────────────────────────────────────────────────────────
+gunicorn 
 
 # ── Tools ────────────────────────────────────────────────────────
 tavily-python              # Tavily web search
 beautifulsoup4             # web scraping
 requests
 httpx                      # async HTTP client
+aiosqlite
+pandas
 
 # ── MCP Protocol ─────────────────────────────────────────────────
 mcp                        # Model Context Protocol SDK
@@ -48,11 +63,7 @@ langsmith                  # LangChain tracing & observability
 python-dotenv              # .env file loading
 structlog                  # structured logging
 
-# ── Testing ──────────────────────────────────────────────────────
-pytest
-pytest-asyncio
-httpx                      # for FastAPI test client
-
 # ── Utilities ────────────────────────────────────────────────────
 pydantic                   # data validation & settings
+pydantic-settings
 tiktoken                   # OpenAI token counting

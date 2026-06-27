@@ -13,6 +13,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from utils.logger import get_logger
+from document_parser.reranker import rerank
 
 logger = get_logger(__name__)
 
@@ -117,13 +118,13 @@ def get_or_create_vector_store(file_path: str, session_id: str, user_id: str) ->
         # 3. Check if this exact file is already in the user's collection
         # Filter by doc_hash to find duplicates
         try:
-            existing_docs = vector_store.similarity_search(
-                query="",  # dummy query, we're just checking metadata
-                k=1,
-                filter={"doc_hash": file_hash}
-            )
+            with vector_store._conn() as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM langchain_pg_embedding WHERE cmetadata->>'doc_hash' = %s",
+                    (file_hash,)
+                ).fetchone()[0]
             
-            if existing_docs and len(existing_docs) > 0:
+            if count > 0:
                 logger.info(f"File hash {file_hash} already indexed for user {user_id}. Skipping re-ingestion!")
                 return vector_store
         except Exception as e:
@@ -157,16 +158,48 @@ def get_or_create_vector_store(file_path: str, session_id: str, user_id: str) ->
         logger.error(f"Failed to get or create vector store: {e}", exc_info=True)
         raise
 
-async def asearch_documents(vector_store: PGVector, query: str, k=3) -> List[str]:
-    """Asynchronous similarity search for LangGraph."""
-    logger.info("Performing similarity search...")
+async def asearch_documents(
+    vector_store: PGVector,
+    query: str,
+    top_k: int = 5,
+    candidate_k: int = 20,
+    filter: dict | None = None,
+) -> List[str]:
+    """
+    Two-stage retrieval pipeline:
+      Stage 1 — Wide cosine similarity search: fetch `candidate_k` chunks (default 20)
+      Stage 2 — CrossEncoder reranking: score all candidates jointly with query,
+                 return the best `top_k` (default 5)
+
+    Args:
+        query:       User search query.
+        top_k:       Final number of chunks to return after reranking.
+        candidate_k: Wider initial pool size for Stage 1. Should be >> top_k.
+        filter:      Optional PGVector metadata filter (e.g. {"source": file_path})
+                     to scope search to a specific document.
+    """
+    logger.info(
+        f"Stage 1: cosine similarity search — candidate_k={candidate_k}, filter={filter}"
+    )
     try:
-        retrieved_docs = await vector_store.asimilarity_search(query=query, k=k)
-        context = [d.page_content for d in retrieved_docs]
-        logger.info(f"Retrieved {len(context)} documents.")
-        return context
+        # ── Stage 1: Wide similarity search ──────────────────────────────────
+        candidates = await vector_store.asimilarity_search(
+            query=query,
+            k=candidate_k,
+            filter=filter,
+        )
+        candidate_texts = [doc.page_content for doc in candidates]
+        logger.info(f"Stage 1 complete: {len(candidate_texts)} candidates retrieved.")
+
+        # ── Stage 2: CrossEncoder reranking ──────────────────────────────────
+        logger.info(f"Stage 2: reranking {len(candidate_texts)} candidates → top {top_k}")
+        reranked = await rerank(query=query, chunks=candidate_texts, top_k=top_k)
+        logger.info(f"Stage 2 complete: {len(reranked)} chunks after reranking.")
+
+        return reranked
+
     except Exception as e:
-        logger.error(f"Similarity search failed: {e}", exc_info=True)
+        logger.error(f"Retrieval pipeline failed: {e}", exc_info=True)
         raise
 
 # ← UPDATED: Added user_id parameter

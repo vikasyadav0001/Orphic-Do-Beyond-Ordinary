@@ -2,13 +2,17 @@ import os
 import shutil
 import asyncio
 from typing import Optional
-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import SystemMessage
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from document_parser.graph import pipeline as doc_pipeline
 from document_parser.proactive_analyzer import extract_preview, stream_opening_offer
 from orchestrators.graph import get_bot, stream_response
+from api.auth import current_active_user
+from db.models import User, Conversation, get_async_session
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -40,7 +44,8 @@ async def chat_stream(
     file: Optional[UploadFile] = File(None),
     message: Optional[str] = Form(None),
     session_id: str = Form(...),
-    user_id: str = Form(...),
+    user: User = Depends(current_active_user),
+    db_session: AsyncSession = Depends(get_async_session),
 ):
     """
     Unified streaming endpoint for documents, images, and text queries.
@@ -51,10 +56,38 @@ async def chat_stream(
         C. Message only    → stream agent response directly
         D. Nothing         → return guidance message
     """
+    try:
+        stmt = select(Conversation).where(
+            Conversation.id == session_id,
+            Conversation.user_id == user.id
+        )
+        result = await db_session.execute(stmt)
+        existing_conv = result.scalar_one_or_none()
+
+        if not existing_conv:
+            if message:
+                title = message[:30] + ("..." if len(message) > 30 else "")
+            elif file and file.filename:
+                title = f"Doc: {file.filename}"
+            else:
+                title = "New Chat"
+
+            new_conv = Conversation(
+                id=session_id,
+                user_id=user.id,
+                title=title
+            )
+            db_session.add(new_conv)
+            await db_session.commit()
+            logger.info(f"Auto-created sidebar thread {session_id} for user {user.id} with title: '{title}'")
+    except Exception as e:
+        logger.error(f"Failed to auto-create conversation: {e}", exc_info=True)
+
     async def sse_generator():
         file_path = None
         pipeline_result = {}
         is_image = False
+        user_id = str(user.id)
 
         # ── STEP 1: Handle file upload ──────────────────────────────────────
         if file and file.filename:

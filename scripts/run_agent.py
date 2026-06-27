@@ -2,13 +2,14 @@ import asyncio
 import sys
 from orchestrators.graph import stream_response
 from memory.memory_extractor import graph as extractor_graph
+from schemas.context import UserContext
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 async def main():
     thread_id = "test-thread-3"
-    user_id = "default_user"
+    user_id = "cli_test_user"  # distinct from "default_user" so fallback is detectable
 
     print("=" * 50)
     print("  Orphic Agent - Interactive Mode")

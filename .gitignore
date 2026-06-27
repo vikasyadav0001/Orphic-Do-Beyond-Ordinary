@@ -16,6 +16,7 @@ env/
 .env.local
 
 # ===================== Environment Variables (SECRETS) =====================
+
 .env
 .env.*
 !.env.example        # keep the example template, never the real .env
@@ -67,9 +68,14 @@ docker-compose.override.yml
 #others
 doc_image_pipeline_flow.png
 image.png
+CLAUDE.md
+System_Design_Complete_Roadmap_2025.pdf
+system_design_mapping.md
+temp_test.py
 
 # Ignore all files inside the uploads directory
 uploads/*
 
 # Exception: Keep the directory structure tracked via a hidden file
 !uploads/.gitkeep
+dp.md
