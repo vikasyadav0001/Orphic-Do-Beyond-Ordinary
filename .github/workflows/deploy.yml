@@ -1,9 +1,19 @@
+#build + push ACR + redeploy App Service on merge to main
 name: CI/CD Pipeline
 
 on:
   push:
     branches:
       - main
+
+# Cancel in-progress runs of the same workflow on the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Restrict permissions for security
+permissions:
+  contents: read
 
 jobs:
   # ── Job 1: Run Tests ─────────────────────────────────────────────────────────
@@ -97,9 +107,11 @@ jobs:
           script: |
             cd /opt/orphic/app
 
-            # Pull latest code
+            # Fetch latest commits and reset local state to mirror origin/main
+            git fetch origin
             git checkout main
-            git pull origin main
+            git reset --hard origin/main
+            git clean -fd
 
             # Login to ACR
             docker login orphicregistry.azurecr.io \
@@ -112,8 +124,21 @@ jobs:
             # Restart with new image
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-            # Verify app is healthy
-            sleep 10
-            curl -f http://127.0.0.1:8000/health || exit 1
+            # Verify app is healthy (retry check up to 15 times, waiting 2 seconds between checks)
+            echo "Checking application health..."
+            HEALTH_OK=false
+            for i in {1..15}; do
+              if curl -f http://127.0.0.1:8000/health; then
+                HEALTH_OK=true
+                break
+              fi
+              echo "App not ready yet, retrying in 2 seconds ($i/15)..."
+              sleep 2
+            done
+
+            if [ "$HEALTH_OK" = false ]; then
+              echo "App failed to start within 30 seconds"
+              exit 1
+            fi
 
             echo "Deployment successful"
