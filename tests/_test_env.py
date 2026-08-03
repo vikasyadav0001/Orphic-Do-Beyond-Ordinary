@@ -19,6 +19,7 @@ import os
 # ── Secrets (test-only, never used in production) ────────────────────────────
 os.environ["OPENAI_API_KEY"] = "test-openai-key-not-real"
 os.environ["GROQ_API_KEY"] = "test-groq-key-not-real"
+os.environ["MISTRAL_API_KEY"] = "test-mistral-key-not-real"
 os.environ["JWT_SECRET"] = "test-jwt-secret-for-pytest-only-do-not-use-in-prod"
 os.environ["JWT_ALGORITHM"] = "HS256"
 os.environ["JWT_EXPIRY_MINUTES"] = "60"
