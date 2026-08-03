@@ -11,9 +11,10 @@ from pydantic import BaseModel
 import uuid
 
 from db.models import Conversation, User, get_async_session
+from api.scalekit_auth import current_scalekit_active_user
 from api.auth import current_active_user
 from utils.logger import get_logger
-from orchestrators.graph import get_bot
+from orchestrators.graph import get_thread_state
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 logger = get_logger(__name__)
@@ -38,7 +39,7 @@ class ConversationUpdate(BaseModel):
 # --- Endpoints ---
 @router.get("/", response_model=List[ConversationResponse])
 async def get_user_conversations(
-    user: User = Depends(current_active_user),
+    user: User = Depends(current_scalekit_active_user),
     session: AsyncSession = Depends(get_async_session)
 ):
     """Fetch all conversations for the logged-in user to populate the sidebar."""
@@ -65,7 +66,7 @@ async def get_user_conversations(
 @router.post("/", response_model=ConversationResponse)
 async def create_conversation(
     data: ConversationCreate,
-    user: User = Depends(current_active_user),
+    user: User = Depends(current_scalekit_active_user),
     session: AsyncSession = Depends(get_async_session)
 ):
     """Create a new conversation (New Chat button)."""
@@ -89,7 +90,7 @@ async def create_conversation(
 @router.get("/{thread_id}/messages")
 async def get_conversation_messages(
     thread_id: str,
-    user: User = Depends(current_active_user),
+    user: User = Depends(current_scalekit_active_user),
     session: AsyncSession = Depends(get_async_session)
 ):
     """Fetch the chat history for a specific conversation from LangGraph."""
@@ -104,12 +105,9 @@ async def get_conversation_messages(
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=403, detail="Conversation not found or unauthorized")
         
-    # 2. Get the bot and load state
-    bot = await get_bot()
-    config = {"configurable": {"thread_id": thread_id, "user_id": str(user.id)}}
-    
+    # 2. Load state from checkpointer
     try:
-        state = await bot.aget_state(config)
+        state = await get_thread_state(thread_id, str(user.id))
         messages = []
         if state and state.values and "messages" in state.values:
             for msg in state.values["messages"]:
@@ -129,7 +127,7 @@ async def get_conversation_messages(
 async def rename_conversation(
     thread_id: str,
     data: ConversationUpdate,
-    user: User = Depends(current_active_user),
+    user: User = Depends(current_scalekit_active_user),
     session: AsyncSession = Depends(get_async_session)
 ):
     """Rename a conversation's title."""
@@ -158,7 +156,7 @@ async def rename_conversation(
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(
     thread_id: str,
-    user: User = Depends(current_active_user),
+    user: User = Depends(current_scalekit_active_user),
     session: AsyncSession = Depends(get_async_session)
 ):
     """Delete a conversation and its corresponding checkpoints in LangGraph."""

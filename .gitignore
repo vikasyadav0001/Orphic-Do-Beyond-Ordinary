@@ -66,13 +66,16 @@ frontend/build/
 docker-compose.override.yml
 
 #others
+rag_gap_analysis.md
+production_rag_pipeline.md
 doc_image_pipeline_flow.png
 image.png
 CLAUDE.md
 System_Design_Complete_Roadmap_2025.pdf
 system_design_mapping.md
-temp_test.py
-
+test_temp.py
+test_*
+orphic_implementation_plan.md
 # Ignore all files inside the uploads directory
 uploads/*
 

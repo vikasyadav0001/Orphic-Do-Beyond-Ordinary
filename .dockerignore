@@ -16,3 +16,4 @@ tests/
 .ruff_cache
 uploads/
 pytest.ini
+.md

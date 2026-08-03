@@ -1,6 +1,7 @@
 """
 Authentication setup using fastapi-users.
 Handles JWT issuance, password hashing, and user validation.
+Supports secure CookieTransport.
 """
 
 import uuid
@@ -10,8 +11,8 @@ from fastapi import Depends, Request
 from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
 from fastapi_users.authentication import (
     AuthenticationBackend,
-    BearerTransport, 
     JWTStrategy,
+    CookieTransport
 )
 
 from fastapi_users import schemas
@@ -31,15 +32,21 @@ logger = get_logger(__name__)
 
 SECRET = env.jwt_secret
 
-bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")
+# ─── Cookie Transport (secure production configuration) ─────────────────────────
+cookie_transport = CookieTransport(
+    cookie_name="orphic_auth",
+    cookie_max_age=3600,
+    cookie_secure=env.frontend_url.startswith("https"),
+    cookie_httponly=True,
+    cookie_samesite="lax",
+)
 
 def get_jwt_strategy() -> JWTStrategy:
-
     return JWTStrategy(secret=SECRET, lifetime_seconds=3600)
 
 auth_backend = AuthenticationBackend(
     name="jwt",
-    transport=bearer_transport,
+    transport=cookie_transport,
     get_strategy=get_jwt_strategy
 )
 
@@ -56,14 +63,11 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         self, user: User, token: str, request: Optional[Request] = None
     ):
         logger.info(f"User {user.id} has forgot their password.")
-        # TODO: Send an email to user.email containing the reset token
-
 
     async def on_after_request_verify(
         self, user: User, token: str, request: Optional[Request] = None
     ):
         logger.info(f"Verification requested for user {user.id}.")
-        # TODO: Send an email to user.email containing the verification token
 
 
 async def get_user_manager(user_db=Depends(get_user_db)):
@@ -74,5 +78,5 @@ fastapi_users = FastAPIUsers[User, uuid.UUID](
     [auth_backend],
 )
 
-# 4. Dependency to use in our routes to protect endpoints!
+# Protects endpoints using active user verification
 current_active_user = fastapi_users.current_user(active=True)

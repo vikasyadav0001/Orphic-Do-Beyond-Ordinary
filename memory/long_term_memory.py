@@ -26,6 +26,10 @@ async def setup_memory_store():
     """Initialize the memory store with connection pooling."""
     global store
 
+    if store is not None:
+       logger.info("Memory store already initialized, skipping setup")
+       return store
+
     try:
         store = AsyncPostgresStore(
             pool,

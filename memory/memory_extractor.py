@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from functools import lru_cache
 
 from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
@@ -22,9 +23,9 @@ logger = get_logger(__name__)
 #Extractor LLM
 @lru_cache
 def get_extractor_llm() -> ChatOpenAI:
-    return ChatOpenAI(
-        model="gpt-4o-mini",
-        api_key=env.openai_api_key
+    return ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=env.groq_api_key
     )
 
 try:
@@ -46,7 +47,7 @@ class MemoryDecesion(BaseModel):
 
 #initialise the extractor
 try:
-    memory_extractor = extractor_llm.with_structured_output(MemoryDecesion)
+    memory_extractor = extractor_llm.with_structured_output(MemoryDecesion, method="function_calling")
 except Exception as e:
     logger.error(f"Failed to configure structured output: {e}")
     raise
@@ -174,3 +175,15 @@ builder.add_edge("remember", END)
 graph = builder.compile(store=ltm.store)
 
 
+#memory extractor 
+async def extract_memory(user_message: str, user_id:str):
+    """Fire-and-forget task to extract long-term memories without blocking the stream."""
+    try:
+        logger.info(f"Starting backgrond memory extraction of user: {user_id}")
+        await graph.ainvoke(
+            {"messages" : [HumanMessage(content=user_message)]},
+            config={"configurable" : {"user_id" : user_id}}
+        )
+        logger.info("Memory extraction finished")
+    except Exception as e:
+        logger.error(f"Memory extraction failed: {e}", exc_info=True)

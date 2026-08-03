@@ -2,6 +2,13 @@
 conftest.py
 ===========
 Shared pytest fixtures for the Orphic test suite.
+
+Updated to match the rewritten graph.py public API:
+  - stream_response() yields (event_type, data) tuples
+  - update_agent_state() replaces get_bot().aupdate_state()
+  - get_thread_state() replaces get_bot().aget_state()
+  - setup_db() and setup_memory_store() are mocked to prevent psycopg
+    from trying to open connection pools to SQLite during app lifespan.
 """
 
 # ─── MUST BE FIRST: sets os.environ before any app/config import ────────────
@@ -22,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
+from fastapi import Depends
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
@@ -90,17 +98,26 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. APP + TestClient (sync) and AsyncClient
+#
+# Mocking strategy (post-rewrite):
+#   OLD: get_bot() → mock_bot.aupdate_state / mock_bot.aget_state
+#   NEW: update_agent_state() → returns True
+#        get_thread_state() → returns MagicMock(values={"messages": []})
+#        stream_response()  → yields ("token", word) tuples
+#        resume_response()  → yields ("token", word) tuples
 # ─────────────────────────────────────────────────────────────────────────────
 @pytest_asyncio.fixture
 async def app_with_test_db(test_engine):
     """
     Build the FastAPI app with:
       - the test engine + session wired in via dependency_overrides
-      - the orchestrator (get_bot, stream_response) mocked
+      - the orchestrator functions mocked (no LLM / no Redis / no Postgres pool)
     """
     # Import after env vars are set so config.get_settings() doesn't crash
     from db.models import get_async_session, Base
     from app import app
+    from api.scalekit_auth import current_scalekit_active_user
+    from api.auth import current_active_user
 
     SessionLocal = async_sessionmaker(test_engine, expire_on_commit=False)
 
@@ -109,24 +126,82 @@ async def app_with_test_db(test_engine):
             yield session
 
     app.dependency_overrides[get_async_session] = _override_get_session
+    
+    async def _override_scalekit_user(user=Depends(current_active_user)):
+        return user
 
-    # Mock the orchestrator at the module level used by the routers
-    mock_bot = MagicMock()
-    mock_bot.aupdate_state = AsyncMock(return_value=None)
-    mock_bot.aget_state = AsyncMock(
+    app.dependency_overrides[current_scalekit_active_user] = _override_scalekit_user
+
+    class _FakeRedis:
+        async def ping(self):
+            return True
+
+        async def aclose(self):
+            return None
+
+    # ── Mock the new graph.py public API ──────────────────────────────────
+
+    # stream_response yields (event_type, data) tuples
+    async def fake_stream_response(user_message, thread_id, user_id, model=None):
+        for token in ["Hello", " ", "from", " ", "mocked", " ", "bot."]:
+            yield ("token", token)
+        yield ("done", None)
+
+    # resume_response yields the same tuple format
+    async def fake_resume_response(thread_id, user_id, resume_value):
+        decision = resume_value.get("decision") if isinstance(resume_value, dict) else resume_value
+        if decision == "cancel":
+            yield ("token", "Action cancelled.")
+            yield ("done", None)
+        else:
+            yield ("token", "Resumed successfully.")
+            yield ("done", None)
+
+    # update_agent_state returns True (success)
+    mock_update_state = AsyncMock(return_value=True)
+
+    # get_thread_state returns empty messages
+    mock_get_thread_state = AsyncMock(
         return_value=MagicMock(values={"messages": []})
     )
 
-    async def fake_stream_response(user_message, thread_id, user_id):
-        # Deterministic token stream — lets us assert on the SSE output
-        for token in ["Hello", " ", "from", " ", "mocked", " ", "bot."]:
-            yield token
+    # Mock lifespan database pools to prevent psycopg trying to connect SQLite
+    mock_setup_db = AsyncMock(return_value=MagicMock())
+    mock_setup_memory_store = AsyncMock(return_value=MagicMock())
 
-    with patch("orchestrators.graph.get_bot", new=AsyncMock(return_value=mock_bot)), \
-         patch("api.chat_router.get_bot", new=AsyncMock(return_value=mock_bot)), \
-         patch("api.conversations.get_bot", new=AsyncMock(return_value=mock_bot)), \
+    from services.rate_limiter import ChatRateLimitResult
+
+    mock_chat_rate_allowed = ChatRateLimitResult(
+        allowed=True,
+        denied_reason=None,
+        requests_this_hour=1,
+        requests_today=1,
+        tokens_this_hour=100,
+        tokens_today=100,
+        limit_requests_hour=10,
+        limit_requests_day=30,
+        limit_tokens_hour=500000,
+        limit_tokens_day=1000000,
+        retry_after=None
+    )
+
+    with patch("services.cache.get_redis", AsyncMock(return_value=_FakeRedis())), \
+         patch("services.rate_limiter.get_redis", AsyncMock(return_value=_FakeRedis())), \
+         patch("services.rate_limiter.check_chat_rate", AsyncMock(return_value=mock_chat_rate_allowed)), \
+         patch("services.rate_limiter.log_token_usage", AsyncMock(return_value=None)), \
+         patch("api.chat_router.check_chat_rate", AsyncMock(return_value=mock_chat_rate_allowed)), \
+         patch("api.chat_router.log_token_usage", AsyncMock(return_value=None)), \
+         patch("memory.graph_checkpointer.setup_db", mock_setup_db), \
+         patch("memory.long_term_memory.setup_memory_store", mock_setup_memory_store), \
+         patch("orchestrators.graph.initialize_graph", AsyncMock(return_value=None)), \
          patch("orchestrators.graph.stream_response", side_effect=fake_stream_response), \
-         patch("api.chat_router.stream_response", side_effect=fake_stream_response):
+         patch("orchestrators.graph.resume_response", side_effect=fake_resume_response), \
+         patch("orchestrators.graph.update_agent_state", mock_update_state), \
+         patch("orchestrators.graph.get_thread_state", mock_get_thread_state), \
+         patch("api.chat_router.stream_response", side_effect=fake_stream_response), \
+         patch("api.chat_router.resume_response", side_effect=fake_resume_response), \
+         patch("api.chat_router.update_agent_state", mock_update_state), \
+         patch("api.conversations.get_thread_state", mock_get_thread_state):
         # Also mock the document/image pipeline so chat_router doesn't try to load files
         with patch("api.chat_router.doc_pipeline", new=MagicMock(
             ainvoke=AsyncMock(return_value={
@@ -183,14 +258,16 @@ async def registered_user(client, app_with_test_db) -> dict:
         data={"username": email, "password": password},
         headers={"content-type": "application/x-www-form-urlencoded"},
     )
-    assert login.status_code == 200, f"login failed: {login.text}"
-    token = login.json()["access_token"]
+    assert login.status_code == 204, f"login failed: {login.text}"
+    token = login.cookies.get("orphic_auth") or ""
 
     return {
         "email": email,
         "password": password,
         "token": token,
-        "headers": {"Authorization": f"Bearer {token}"},
+        "headers": {
+            "Cookie": f"orphic_auth={token}",
+        },
     }
 
 
@@ -205,12 +282,15 @@ async def another_user(client) -> dict:
         data={"username": email, "password": password},
         headers={"content-type": "application/x-www-form-urlencoded"},
     )
-    token = login.json()["access_token"]
+    assert login.status_code == 204, f"login failed: {login.text}"
+    token = login.cookies.get("orphic_auth") or ""
     return {
         "email": email,
         "password": password,
         "token": token,
-        "headers": {"Authorization": f"Bearer {token}"},
+        "headers": {
+            "Cookie": f"orphic_auth={token}",
+        },
     }
 
 
@@ -219,11 +299,11 @@ async def another_user(client) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 @pytest.fixture
 def mock_bot():
-    """Bare MagicMock stand-in for the LangGraph agent."""
+    """Bare MagicMock stand-in for the LangGraph agent — kept for backward compat."""
     bot = MagicMock()
     bot.aupdate_state = AsyncMock(return_value=None)
     bot.aget_state = AsyncMock(return_value=MagicMock(values={"messages": []}))
-    bot.astream = MagicMock(return_value=iter([]))  # used in some endpoints
+    bot.astream = MagicMock(return_value=iter([]))
     return bot
 
 

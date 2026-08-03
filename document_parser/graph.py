@@ -24,6 +24,8 @@ class PipelineState(TypedDict):
     response: str
     error: str
     vector_store_ready: bool
+    blob_url:Optional[str]
+
 
 
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}

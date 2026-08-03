@@ -259,6 +259,8 @@ class TestUserConnectionCRUD:
             id=str(uuid.uuid4()),
             user_id=user.id,
             provider="github",
+            auth_type="oauth2",
+            access_token="mock_token",
         )
         db_session.add(connection)
         await db_session.commit()
@@ -285,8 +287,8 @@ class TestUserConnectionCRUD:
         await db_session.flush()
 
         db_session.add_all([
-            UserConnection(id=str(uuid.uuid4()), user_id=user.id, provider="github"),
-            UserConnection(id=str(uuid.uuid4()), user_id=user.id, provider="notion"),
+            UserConnection(id=str(uuid.uuid4()), user_id=user.id, provider="github", auth_type="oauth2", access_token="mock_token"),
+            UserConnection(id=str(uuid.uuid4()), user_id=user.id, provider="notion", auth_type="oauth2", access_token="mock_token"),
         ])
         await db_session.commit()
 

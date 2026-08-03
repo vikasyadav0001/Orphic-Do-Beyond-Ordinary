@@ -6,6 +6,7 @@ from langchain_pymupdf4llm import PyMuPDF4LLMLoader
 from langchain_community.document_loaders.parsers import LLMImageBlobParser
 from langchain_community.document_loaders import CSVLoader, TextLoader, UnstructuredExcelLoader
 from langchain_groq import ChatGroq
+from langchain_mistralai import ChatMistralAI, MistralAIEmbeddings
 from config import get_settings
 from typing import List
 from langchain_postgres import PGVector
@@ -17,9 +18,14 @@ from document_parser.reranker import rerank
 
 logger = get_logger(__name__)
 
-llm = ChatGroq(
-    model="meta-llama/llama-4-scout-17b-16e-instruct",
-    api_key=get_settings().groq_api_key,
+# llm = ChatGroq(
+#     model="qwen/qwen3.6-27b",
+#     api_key=get_settings().groq_api_key,
+# )
+
+llm = ChatMistralAI(
+    model="mistral-small-2506",
+    api_key=get_settings().mistral_api_key,
 )
 
 embedding_model = OpenAIEmbeddings(
@@ -118,7 +124,7 @@ def get_or_create_vector_store(file_path: str, session_id: str, user_id: str) ->
         # 3. Check if this exact file is already in the user's collection
         # Filter by doc_hash to find duplicates
         try:
-            with vector_store._conn() as conn:
+            with vector_store._engine.connect() as conn:
                 count = conn.execute(
                     "SELECT COUNT(*) FROM langchain_pg_embedding WHERE cmetadata->>'doc_hash' = %s",
                     (file_hash,)

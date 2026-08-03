@@ -19,7 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
  
 # Install dependencies into isolated prefix (not user-local, avoids home dir confusion)
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefix=/install --timeout=300 -r requirements.txt
  
  
 # ==============================================================================
@@ -52,14 +53,16 @@ COPY --from=builder /install /install
 
 ENV HF_HOME=/home/orphic/.cache/huggingface
 
+RUN chown -R orphic:orphic /home/orphic /app
+
+USER orphic
+
 RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
 COPY --chown=orphic:orphic . .
 
-RUN chown -R orphic:orphic /home/orphic /app && chmod +x entrypoint.sh
+RUN chmod +x entrypoint.sh
 
-USER orphic
- 
 EXPOSE 8000
  
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

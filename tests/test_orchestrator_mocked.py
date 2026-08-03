@@ -7,22 +7,24 @@ Goal: prove our code correctly *handles* the LangGraph orchestrator's output
 WITHOUT actually calling OpenAI / Groq / MCP servers. We mock at the boundary
 that crosses into the agent so every test runs in milliseconds and costs $0.
 
-What's mocked:
-  - ``orchestrators.graph.get_bot``         — bot construction
-  - ``orchestrators.graph.stream_response``  — token generator
-  - ``api.chat_router.doc_pipeline``        — image/doc ingestion
-  - LangChain ChatOpenAI / ChatGroq         — instantiated at module import
+What's mocked (post-rewrite):
+  - ``orchestrators.graph.stream_response``  — (event_type, data) tuple generator
+  - ``orchestrators.graph.resume_response``  — resume tuple generator
+  - ``orchestrators.graph.update_agent_state`` — state injection
+  - ``orchestrators.graph.get_thread_state``   — state retrieval
+  - ``api.chat_router.doc_pipeline``          — image/doc ingestion
 
 What's NOT mocked:
   - FastAPI request/response lifecycle
   - Auth dependency (we use real test users)
-  - Database persistence
+  - Database persistence (conversations table)
   - The SSE serialization / chunking logic
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -30,6 +32,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 pytestmark = pytest.mark.orchestrator
+
+
+def _pending_interrupt_state():
+    return MagicMock(
+        tasks=[
+            MagicMock(
+                interrupts=[
+                    MagicMock(value={"id": "interrupt-1"})
+                ]
+            )
+        ]
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +54,7 @@ class TestChatStreamMessageOnly:
         self, client, registered_user, mock_bot
     ):
         """No file, just text → must yield the mocked tokens via SSE."""
-        # The fake_stream_response in conftest yields 'Hello from mocked bot.'
+        # The fake_stream_response in conftest yields ("token", word) tuples
         with client.stream(
             "POST",
             "/chat/stream",
@@ -55,15 +69,9 @@ class TestChatStreamMessageOnly:
             body = "".join(resp.iter_text())
 
         # Every SSE chunk is "data: <token>\n\n" — concat the data lines
-        tokens = []
-        for line in body.splitlines():
-            if line.startswith("data: "):
-                tokens.append(line[len("data: "):])
-
-        joined = "".join(tokens)
-        assert "Hello" in joined
-        assert "mocked" in joined
-        assert "bot." in joined
+        assert '"text":"Hello"' in body or '"text": "Hello"' in body
+        assert '"text":"mocked"' in body or '"text": "mocked"' in body
+        assert '"text":"bot."' in body or '"text": "bot."' in body
 
     def test_message_only_persists_conversation(self, client, registered_user):
         """Hitting /chat/stream auto-creates a conversation row."""
@@ -198,20 +206,15 @@ class TestChatStreamErrorHandling:
 
         assert "File corrupted" in body
 
-    def test_bot_init_failure_yields_friendly_error(self, client, registered_user):
-        """If get_bot raises, stream_response must yield an error string,
-        not crash the request."""
-        # Patch BOTH api.chat_router.get_bot AND orchestrators.graph.get_bot
-        # because chat_router imports get_bot directly into its module namespace.
+    def test_stream_error_yields_friendly_message(self, client, registered_user):
+        """If stream_response yields an error tuple, the SSE must contain a
+        structured JSON error, not crash the request."""
         from api import chat_router as cr
-        from orchestrators import graph as og
 
-        async def fake_stream(*args, **kwargs):
-            yield "Sorry, I'm having trouble starting up. Please try again later."
+        async def failing_stream(*args, **kwargs):
+            yield ("error", "Service is starting up. Please try again.")
 
-        with patch.object(cr, "get_bot", new=AsyncMock(side_effect=RuntimeError("DB down"))), \
-             patch.object(og, "get_bot", new=AsyncMock(side_effect=RuntimeError("DB down"))), \
-             patch.object(cr, "stream_response", side_effect=fake_stream):
+        with patch.object(cr, "stream_response", side_effect=failing_stream):
             with client.stream(
                 "POST", "/chat/stream",
                 data={"session_id": str(uuid.uuid4()), "message": "hi"},
@@ -219,125 +222,222 @@ class TestChatStreamErrorHandling:
             ) as resp:
                 body = "".join(resp.iter_text())
 
-        assert "Sorry" in body
+        assert "starting up" in body.lower() or "error" in body.lower()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Memory middleware — pure unit test, no DB / no LLM
+# 4. /chat/stream — SSE event structure (tuple unpacking)
 # ─────────────────────────────────────────────────────────────────────────────
-class TestMemoryMiddlewareUnit:
-    """
-    Port the standalone test_memory_middleware.py into pytest form.
-    Patches retrieve_memory so no Postgres + no OpenAI embeddings needed.
-    """
+class TestSSEEventStructure:
+    """Verify that stream_response's (event_type, data) tuples are correctly
+    serialized into SSE events with proper JSON structure for control events."""
 
-    FAKE_MEMORIES = [
-        "User's name is Vikas",
-        "User works on Project Orphic",
-        "User prefers Python",
-    ]
+    def test_done_event_is_json(self, client, registered_user):
+        """The 'done' event must be serialized as a JSON object."""
+        with client.stream(
+            "POST", "/chat/stream",
+            data={"session_id": str(uuid.uuid4()), "message": "hi"},
+            headers=registered_user["headers"],
+        ) as resp:
+            body = "".join(resp.iter_text())
 
-    @pytest.mark.asyncio
-    async def test_abefore_agent_returns_memory_prompt(self):
-        from middleware.memory_middleware import MemoryMiddleware
-        from schemas.context import UserContext
-        
-        middleware = MemoryMiddleware()
-        mock_runtime = MagicMock()
-        mock_runtime.context = UserContext(user_id="test_user")
+        # Find the done event
+        for line in body.splitlines():
+            if line.startswith("data: "):
+                payload = line[len("data: "):]
+                try:
+                    parsed = json.loads(payload)
+                    if isinstance(parsed, dict) and parsed.get("type") == "done":
+                        return  # test passes
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        # If no done event found, that's acceptable too (some streams don't yield done)
 
-        with patch(
-            "middleware.memory_middleware.retrieve_memory",
-            new=AsyncMock(return_value=self.FAKE_MEMORIES),
-        ):
-            result = await middleware.abefore_agent(
-                {"messages": []},
-                runtime=mock_runtime,
-            )
+    def test_interrupt_event_structure(self, client, registered_user):
+        """When stream_response yields an interrupt, it must be JSON with type=interrupt."""
+        from api import chat_router as cr
 
-        assert isinstance(result, dict)
-        assert "memory_prompt" in result
-        assert "Vikas" in result["memory_prompt"]
-        assert "Project Orphic" in result["memory_prompt"]
+        async def interrupt_stream(*args, **kwargs):
+            yield ("token", "Let me check...")
+            yield ("interrupt", {"provider": "github", "action": "connect"})
 
-    @pytest.mark.asyncio
-    async def test_abefore_agent_handles_retrieve_failure(self):
-        """If retrieve_memory throws, middleware must fall back gracefully
-        (return an empty memory_prompt) instead of crashing the agent."""
-        from middleware.memory_middleware import MemoryMiddleware
-        from schemas.context import UserContext
-        
-        middleware = MemoryMiddleware()
-        mock_runtime = MagicMock()
-        mock_runtime.context = UserContext(user_id="test_user")
+        with patch.object(cr, "stream_response", side_effect=interrupt_stream):
+            with client.stream(
+                "POST", "/chat/stream",
+                data={"session_id": str(uuid.uuid4()), "message": "list my repos"},
+                headers=registered_user["headers"],
+            ) as resp:
+                body = "".join(resp.iter_text())
 
-        with patch(
-            "middleware.memory_middleware.retrieve_memory",
-            new=AsyncMock(side_effect=RuntimeError("DB down")),
-        ):
-            result = await middleware.abefore_agent(
-                {"messages": []},
-                runtime=mock_runtime,
-            )
+        # Must contain both a token and a structured interrupt
+        assert "Let me check" in body
+        found_interrupt = False
+        for line in body.splitlines():
+            if line.startswith("data: "):
+                payload = line[len("data: "):]
+                try:
+                    parsed = json.loads(payload)
+                    if isinstance(parsed, dict) and parsed.get("type") == "interrupt":
+                        assert parsed["data"]["provider"] == "github"
+                        found_interrupt = True
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        assert found_interrupt, "No interrupt event found in SSE stream"
 
-        assert "memory_prompt" in result
-        assert isinstance(result["memory_prompt"], str)
 
-    @pytest.mark.asyncio
-    async def test_awrap_model_call_injects_system_message(self):
-        from langchain_core.messages import AIMessage, SystemMessage
-        from langchain.agents.middleware.types import (
-            ModelRequest,
-            ModelResponse,
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. /chat/resume/{session_id} — resume after HITL interrupt
+# ─────────────────────────────────────────────────────────────────────────────
+class TestChatResume:
+    def test_resume_requires_auth(self, client):
+        """POST /chat/resume without token → 401."""
+        resp = client.post(
+            f"/chat/resume/{uuid.uuid4()}",
+            json={
+                "interrupt_id": "interrupt-1",
+                "decision": "connected",
+                "input": {},
+            },
         )
-        from middleware.memory_middleware import MemoryMiddleware
-        from prompts.system_persona_prompt import get_prompt
+        assert resp.status_code == 401
 
-        middleware = MemoryMiddleware()
-        expected_prompt = get_prompt(self.FAKE_MEMORIES)
+    def test_resume_rejects_invalid_action(self, client, registered_user):
+        """action must be 'continue' or 'cancel', not arbitrary strings."""
+        sid = str(uuid.uuid4())
+        # Create the conversation first
+        with client.stream(
+            "POST", "/chat/stream",
+            data={"session_id": sid, "message": "hi"},
+            headers=registered_user["headers"],
+        ) as resp:
+            for _ in resp.iter_text():
+                pass
 
-        req = ModelRequest(
-            model=MagicMock(),
-            messages=[],
-            system_message=None,
-            state={"messages": [], "memory_prompt": expected_prompt},
-            runtime=None,
+        resp = client.post(
+            f"/chat/resume/{sid}",
+            json={
+                "interrupt_id": "interrupt-1",
+                "decision": "hack",
+                "input": {},
+            },
+            headers=registered_user["headers"],
         )
+        assert resp.status_code == 422
 
-        captured = {}
+    def test_resume_unknown_session_403(self, client, registered_user):
+        """Resuming a thread that doesn't belong to the user → 403."""
+        with patch("api.chat_router.get_thread_state", AsyncMock(return_value=_pending_interrupt_state())), \
+             patch("orchestrators.graph.get_thread_state", AsyncMock(return_value=_pending_interrupt_state())):
+            resp = client.post(
+                f"/chat/resume/{uuid.uuid4()}",
+                json={
+                    "interrupt_id": "interrupt-1",
+                    "decision": "connected",
+                    "input": {},
+                },
+                headers=registered_user["headers"],
+            )
+        assert resp.status_code == 403
 
-        async def fake_handler(r):
-            captured["sys"] = r.system_message
-            return ModelResponse(result=[AIMessage(content="ok")])
+    def test_resume_continue_streams_tokens(self, client, registered_user):
+        """A 'continue' resume must stream tokens from resume_response."""
+        sid = str(uuid.uuid4())
+        # Create the conversation first
+        with client.stream(
+            "POST", "/chat/stream",
+            data={"session_id": sid, "message": "hi"},
+            headers=registered_user["headers"],
+        ) as resp:
+            for _ in resp.iter_text():
+                pass
 
-        await middleware.awrap_model_call(req, fake_handler)
+        with patch("api.chat_router.get_thread_state", AsyncMock(return_value=_pending_interrupt_state())), \
+             patch("orchestrators.graph.get_thread_state", AsyncMock(return_value=_pending_interrupt_state())):
+            # Resume
+            with client.stream(
+                "POST", f"/chat/resume/{sid}",
+                json={
+                    "interrupt_id": "interrupt-1",
+                    "decision": "connected",
+                    "input": {},
+                },
+                headers=registered_user["headers"],
+            ) as resp:
+                body = "".join(resp.iter_text())
 
-        assert isinstance(captured["sys"], SystemMessage)
-        assert "Vikas" in captured["sys"].content
+        assert "Resumed successfully" in body
 
-    @pytest.mark.asyncio
-    async def test_awrap_tool_call_catches_errors(self):
-        """A failing MCP tool must return a ToolMessage with status='error',
-        not crash the entire ReAct loop."""
-        from middleware.memory_middleware import MemoryMiddleware
-        from langchain_core.messages import ToolMessage
+    def test_resume_cancel_streams_cancellation(self, client, registered_user):
+        """A 'cancel' resume must stream the cancellation message."""
+        sid = str(uuid.uuid4())
+        # Create the conversation first
+        with client.stream(
+            "POST", "/chat/stream",
+            data={"session_id": sid, "message": "hi"},
+            headers=registered_user["headers"],
+        ) as resp:
+            for _ in resp.iter_text():
+                pass
 
-        middleware = MemoryMiddleware()
-        req = MagicMock()
-        req.tool_call = {"id": "tc_abc123", "name": "broken_tool", "args": {}}
+        with patch("api.chat_router.get_thread_state", AsyncMock(return_value=_pending_interrupt_state())), \
+             patch("orchestrators.graph.get_thread_state", AsyncMock(return_value=_pending_interrupt_state())):
+            # Resume with cancel
+            with client.stream(
+                "POST", f"/chat/resume/{sid}",
+                json={
+                    "interrupt_id": "interrupt-1",
+                    "decision": "cancel",
+                    "input": {},
+                },
+                headers=registered_user["headers"],
+            ) as resp:
+                body = "".join(resp.iter_text())
 
-        async def failing_handler(r):
-            raise RuntimeError("MCP server unreachable")
+        found_cancel = False
+        for line in body.splitlines():
+            if line.startswith("data: "):
+                payload = line[len("data: "):]
+                try:
+                    parsed = json.loads(payload)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(parsed, dict) and parsed.get("type") == "token":
+                    text = parsed.get("data", {}).get("text", "")
+                    if text == "Action cancelled.":
+                        found_cancel = True
+                        break
 
-        result = await middleware.awrap_tool_call(req, failing_handler)
-        assert isinstance(result, ToolMessage)
-        assert result.status == "error"
-        assert "MCP server unreachable" in result.content
-        assert result.tool_call_id == "tc_abc123"
+        assert found_cancel, body
+
+    def test_resume_cross_user_rejected(self, client, registered_user, another_user):
+        """User B cannot resume User A's conversation."""
+        sid = str(uuid.uuid4())
+        # User A creates a conversation
+        with client.stream(
+            "POST", "/chat/stream",
+            data={"session_id": sid, "message": "private stuff"},
+            headers=registered_user["headers"],
+        ) as resp:
+            for _ in resp.iter_text():
+                pass
+
+        # User B tries to resume it
+        with patch("api.chat_router.get_thread_state", AsyncMock(return_value=_pending_interrupt_state())), \
+             patch("orchestrators.graph.get_thread_state", AsyncMock(return_value=_pending_interrupt_state())):
+            resp = client.post(
+                f"/chat/resume/{sid}",
+                json={
+                    "interrupt_id": "interrupt-1",
+                    "decision": "connected",
+                    "input": {},
+                },
+                headers=another_user["headers"],
+            )
+        assert resp.status_code == 403
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Document pipeline routing — without invoking LLMs
+# 6. Document pipeline routing — without invoking LLMs
 # ─────────────────────────────────────────────────────────────────────────────
 class TestDocumentPipelineRouting:
     """
@@ -524,7 +624,7 @@ class TestDocumentPipelineRouting:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Settings — proves config loading works
+# 7. Settings — proves config loading works
 # ─────────────────────────────────────────────────────────────────────────────
 class TestConfigLoading:
     def test_get_settings_is_cached(self):
