@@ -10,28 +10,33 @@ langchain-core
 langchain-openai
 langchain-google-genai
 langchain-anthropic
-langchain-community
+langchain-community==0.4.2
 langchain-groq
-
+langchain-mistralai
+deepagents
 
 # ── PostgreSQL (Production Memory & DB) ─────────────────────────
 psycopg[pool]       # async PostgreSQL driver
-psycopg-pool               # async connection pool
+psycopg-pool
+psycopg2-binary
 langgraph-checkpoint-postgres  # LangGraph Postgres checkpointer
 sqlalchemy[asyncio]        # ORM for user/session models
 asyncpg                    # high-performance async Postgres driver
 langchain-postgres
 alembic
+redis
+#redis-server
 
 # ── Vector Memory (Long-term RAG Memory) ────────────────────────
 pgvector                   # PostgreSQL vector extension python client
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch
+torch==2.13.0+cpu
 sentence-transformers      # local embedding models
 pymupdf
 pymupdf4llm
 langchain-pymupdf4llm
-
+setuptools==82.0.1
+scalekit-sdk-python==2.15.0
 
 # ── API Framework ────────────────────────────────────────────────
 fastapi[standard]
@@ -52,7 +57,7 @@ requests
 httpx                      # async HTTP client
 aiosqlite
 pandas
-
+Pillow
 # ── MCP Protocol ─────────────────────────────────────────────────
 mcp                        # Model Context Protocol SDK
 fastmcp
@@ -66,4 +71,8 @@ structlog                  # structured logging
 # ── Utilities ────────────────────────────────────────────────────
 pydantic                   # data validation & settings
 pydantic-settings
-tiktoken                   # OpenAI token counting
+tiktoken      
+azure-storage-blob            
+azure-monitor-opentelemetry==1.8.9
+opentelemetry-instrumentation-fastapi==0.64b0
+opentelemetry-instrumentation-httpx==0.64b0

@@ -11,7 +11,7 @@ from config import get_settings
 logger = get_logger(__name__)
 
 llm = ChatGroq(
-    model="meta-llama/llama-4-scout-17b-16e-instruct",
+    model="llama-3.3-70b-versatile",
     api_key=get_settings().groq_api_key,
     temperature=0.7
 )
@@ -24,7 +24,6 @@ Based on the preview provided, you must:
 3. Offer 2-3 specific, concrete ways you can help (reference actual content you see)
 Keep your response SHORT and conversational (2-3 sentences max).
 Reference specific details from the preview to make it feel personalized.
-{}
 Example:
 "I see a 24-page research paper on transformer architectures. I can summarize the key findings, 
 explain the methodology in section 3, or compare the benchmark results. What would help most?"
@@ -80,7 +79,7 @@ async def stream_opening_offer(preview_text: str, file_name: str):
     
     try:
         async for chunk in llm.astream(
-            [SystemMessage(content=SYSTEM_PROMPT.format(message))]
+            [SystemMessage(content=SYSTEM_PROMPT)] + [HumanMessage(content=message)]
         ):
             if chunk and chunk.content:
                 yield chunk.content

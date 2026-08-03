@@ -50,10 +50,8 @@ class TestPublicEndpoints:
             "/auth/jwt/login",
             data={"username": email, "password": "Strong1Pass!"},
         )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert "access_token" in body
-        assert body["token_type"].lower() == "bearer"
+        assert resp.status_code == 204, resp.text
+        assert "orphic_auth" in resp.cookies
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,13 +332,14 @@ class TestInactiveUserBlocked:
             "/auth/jwt/login",
             data={"username": email, "password": password},
         )
-        assert result.status_code == 200
-        token = result.json()["access_token"]
+        assert result.status_code == 204
+        token = result.cookies.get("orphic_auth")
+        assert token is not None
 
         # While active → 200
         ok = client.get(
             "/api/v1/conversations/",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"orphic_auth={token}"},
         )
         assert ok.status_code == 200
 
@@ -360,7 +359,7 @@ class TestInactiveUserBlocked:
         # Now the same token must be rejected (active=True check fails)
         forbidden = client.get(
             "/api/v1/conversations/",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"orphic_auth={token}"},
         )
         # fastapi-users returns 401 for inactive users
         assert forbidden.status_code in (401, 403), forbidden.text
