@@ -39,6 +39,7 @@ jobs:
       DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/orphic_test
       OPENAI_API_KEY: "test-key-for-ci-only"
       GROQ_API_KEY: "test-key-for-ci-only"
+      MISTRAL_API_KEY: "test-key-for-ci-only"
       JWT_SECRET: "test-jwt-secret-for-ci-only"
       ENVIRONMENT: test
 
