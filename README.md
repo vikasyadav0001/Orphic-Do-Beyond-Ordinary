@@ -73,7 +73,7 @@ START → agent_node → tool_node → agent_node → ... → END
 - Phase 2: executes all tool calls — remote MCP via `execute_mcp_tool()`, native/custom via `ainvoke()`
 - Critical: `except GraphInterrupt: raise` before any generic `except Exception` so `interrupt()` from nested tools is never swallowed
 
-### Multi-Agent (Workflow Deep Agent)
+### Multi-Agent (Workflow Deep Agent) Pending- Work in progress
 
 Workflow creation uses an Agent-as-Tool pattern:
 
@@ -319,13 +319,13 @@ python -m scripts.run_agent
 
 ## Deployment
 
-- **VM**: Azure B2als_v2 (4GB RAM), `74.225.232.126`
-- **Registry**: `orphicregistry.azurecr.io`
-- **Resource group**: `orphic-rg` (Central India)
-- **CI/CD**: GitHub Actions — test → build → push ACR → SSH deploy → health check
-- **n8n**: self-hosted on same VM via `docker-compose.yml` (infrastructure, not CI/CD)
+- **Stack**: FastAPI + Gunicorn on Azure VM, Nginx reverse proxy
+- **Registry**: Azure Container Registry
+- **CI/CD**: GitHub Actions — test → build → push → SSH deploy → health check
+- **n8n**: self-hosted on same VM via docker-compose
 - **Frontend**: Azure Static Web Apps
-- **SSL/Domain**: pending (GitHub Student Pack → `api.orphic.me`)
+- **Accessible via**: `https://nice-pebble-0de997500.7.azurestaticapps.net/`
+- **API**: `https://orphic-api.centralindia.cloudapp.azure.com/` (SSL via Certbot)
 
 ---
 
