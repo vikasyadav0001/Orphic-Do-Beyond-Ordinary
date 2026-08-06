@@ -32,7 +32,7 @@ def include_object(object, name, type_, reflected, compare_to):
     # Ignore these tables during autogenerate so they don't get dropped
     ignored_tables = [
         "store", "checkpoint_blobs", "vector_migrations", "store_vectors", 
-        "checkpoint_writes", "checkpoint_migrations", "checkpoints", "store_migrations"
+        "checkpoint_writes", "checkpoint_migrations", "checkpoints", "store_migrations", "langchain_pg_embedding", "langchain_pg_collection",
     ]
     if type_ == "table" and name in ignored_tables:
         return False

@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from api.chat_router import router
 from api.conversations import router as conversations_router
 from api.connections_router import router as connections_router
@@ -22,7 +23,7 @@ settings = get_settings()
 if settings.applicationinsights_connection_string:
     configure_azure_monitor(
         connection_string=settings.applicationinsights_connection_string,
-        sampling_ratio=0.2,
+        sampling_ratio=1,
     )
     logger.info("Azure Application Insights telemetry configured.")
 else:
@@ -98,6 +99,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Project-Orphic", lifespan=lifespan)
+
+if settings.applicationinsights_connection_string:
+    FastAPIInstrumentor.instrument_app(app)
+    logger.info("FastAPI request tracing instrumented with OpenTelemetry.")
+else:
+    logger.info("OpenTelemetry FastAPI instrumentation skipped — connection string not set.")
+
 
 app.add_middleware(
     CORSMiddleware,

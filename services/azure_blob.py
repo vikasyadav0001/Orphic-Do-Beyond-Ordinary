@@ -44,10 +44,12 @@ async def upload_file_to_azure_blob(
     async with BlobServiceClient.from_connection_string(connection_string) as service:
         container = service.get_container_client(container_name)
         try:
-            await container.create_container()
+            await container.create_container(public_access="blob")
         except Exception:
-            # Container may already exist; ignore the race.
-            pass
+            try:
+                await container.set_container_access_policy(public_access="blob")
+            except Exception:
+                pass
 
         blob = container.get_blob_client(blob_name)
         await blob.upload_blob(

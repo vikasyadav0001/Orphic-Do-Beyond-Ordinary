@@ -41,7 +41,6 @@ from services.rate_limiter import check_and_increment
 from tools.custom_tools import custom_tools
 from utils.agent_helpers import cancel_all, fetch_connections_from_db, resolve_token
 from db.models import UserConnection, async_session_maker
-from middleware.summarization_middleware import maybe_summarize
 from utils.interrupts import read_resume_value
 from utils.logger import get_logger
 
@@ -104,7 +103,8 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     user_id: str
     thread_id: str
-    model:str
+    model: str
+    summary: str
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -146,7 +146,6 @@ def _sanitize_messages(messages: list) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-
 async def agent_node(state: AgentState, config: RunnableConfig) -> dict:
     user_id = state["user_id"]
 
@@ -178,27 +177,30 @@ async def agent_node(state: AgentState, config: RunnableConfig) -> dict:
     except Exception as e:
         logger.error(f"Connection fetch failed for {user_id}: {e}")
 
-    # 3. Summarize if over token threshold
-    messages = state["messages"]
-
+    # 3. System prompt
     try:
-        messages = await maybe_summarize(messages, user_id)
-    except Exception as e:
-        logger.error(f"Summarization failed for {user_id}: {e}")
-
-    # 4. System prompt
-    try:
-        
         system_prompt = get_prompt(
             user_memory=memories,
             connected_providers=connections,
             available_providers=set(PROVIDERS.keys()) - connections,
         )
+        # Inject persisted summary as background context
+        summary = state.get("summary", "")
+        if summary:
+            system_prompt += (
+                "\n\n<conversation_history_summary>\n"
+                "The following is a summary of the earlier conversation. "
+                "Use it as background context only. Do NOT repeat, restate, "
+                "or reference this summary in your response.\n"
+                f"{summary}\n"
+                "</conversation_history_summary>"
+            )
     except Exception as e:
         logger.error(f"get_prompt failed for {user_id}: {e}")
         system_prompt = "You are Orphic, a helpful AI assistant."
 
-    # 5. LLM call
+    # 4. LLM call
+    messages = state["messages"]
     requested_model = state.get("model", "gpt-5-nano") or config.get("configurable", {}).get("model", "gpt-5-nano")
     
     active_llm = _bounded_models.get(requested_model, _bounded_models["gpt-5-nano"])
@@ -519,6 +521,144 @@ def _route_after_agent(state: AgentState) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# summarize_conversation  (runs after final agent response when needed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Optimal Summarization Thresholds (Hybrid: Token Count + Message Count)
+SUMMARIZE_MAX_MESSAGES = 16   # Summarize if message count in state exceeds 16
+SUMMARIZE_MAX_TOKENS = 4000    # Summarize if total tokens in state exceed 4000 (~16,000 chars)
+KEEP_LAST_N_MESSAGES = 10     # Keep last 10 messages (5 turns) verbatim for immediate context
+
+from langchain_core.messages import RemoveMessage
+
+def _estimate_message_tokens(messages: list) -> int:
+    """
+    Fast, reliable token estimator (~4 chars per token average).
+    Counts string content and structured message content blocks.
+    """
+    total_chars = 0
+    for m in messages:
+        if hasattr(m, "content") and m.content:
+            if isinstance(m.content, str):
+                total_chars += len(m.content)
+            elif isinstance(m.content, list):
+                for item in m.content:
+                    if isinstance(item, dict) and "text" in item and isinstance(item["text"], str):
+                        total_chars += len(item["text"])
+                    elif isinstance(item, str):
+                        total_chars += len(item)
+    return max(1, total_chars // 4)
+
+
+async def summarize_conversation(state: AgentState, config: RunnableConfig) -> dict:
+    """
+    Runs before agent_node on every turn. Uses a hybrid strategy:
+    Triggers summarization if message count > SUMMARIZE_MAX_MESSAGES (16)
+    OR total estimated tokens > SUMMARIZE_MAX_TOKENS (3,500).
+    """
+    messages = state.get("messages", [])
+    user_id = state.get("user_id", "unknown")
+    thread_id = state.get("thread_id", "unknown")
+    total_msgs = len(messages)
+    estimated_tokens = _estimate_message_tokens(messages)
+
+    # Hybrid trigger evaluation
+    exceeds_msg_count = total_msgs > SUMMARIZE_MAX_MESSAGES
+    exceeds_token_count = estimated_tokens > SUMMARIZE_MAX_TOKENS
+    should_summarize = exceeds_msg_count or exceeds_token_count
+
+    if not should_summarize:
+        logger.debug(
+            f"[SummarizeNode] User {user_id} | Thread {thread_id}: "
+            f"Msgs ({total_msgs}/{SUMMARIZE_MAX_MESSAGES}), Tokens (~{estimated_tokens}/{SUMMARIZE_MAX_TOKENS}). Skipping."
+        )
+        return {}
+
+    existing_summary = state.get("summary", "")
+
+    # Messages to summarize = everything except the last KEEP_LAST_N_MESSAGES
+    messages_to_summarize = messages[:-KEEP_LAST_N_MESSAGES]
+    messages_to_keep = messages[-KEEP_LAST_N_MESSAGES:]
+
+    if not messages_to_summarize:
+        return {}
+
+    trigger_reason = []
+    if exceeds_msg_count:
+        trigger_reason.append(f"msgs ({total_msgs} > {SUMMARIZE_MAX_MESSAGES})")
+    if exceeds_token_count:
+        trigger_reason.append(f"tokens (~{estimated_tokens} > {SUMMARIZE_MAX_TOKENS})")
+    reason_str = " & ".join(trigger_reason)
+
+    logger.info(
+        f"[SummarizeNode] Triggering hybrid summarization for User {user_id} (Thread: {thread_id}) | "
+        f"Reason: {reason_str} | Total msgs: {total_msgs} (~{estimated_tokens} tokens) | "
+        f"Summarizing {len(messages_to_summarize)} msgs | Keeping {len(messages_to_keep)} msgs | "
+        f"Has existing summary: {bool(existing_summary)}"
+    )
+
+    # Build summarization prompt
+    conversation_text = "\n".join(
+        f"{getattr(m, 'type', 'unknown').upper()}: {m.content[:500]}"
+        for m in messages_to_summarize
+        if hasattr(m, "content") and isinstance(m.content, str) and m.content.strip()
+    )
+
+    if existing_summary:
+        prompt = (
+            f"Below is an existing summary of earlier conversation:\n\n"
+            f"{existing_summary}\n\n"
+            f"And here are new messages since that summary:\n\n"
+            f"{conversation_text}\n\n"
+            f"Produce an updated, concise summary that captures all important context, "
+            f"user preferences, and decisions. Keep it factual and under 500 words."
+        )
+    else:
+        prompt = (
+            f"Summarize this conversation concisely, capturing all important context, "
+            f"user preferences, and decisions. Keep it factual and under 500 words.\n\n"
+            f"{conversation_text}"
+        )
+
+    # Use a cheap model for summarization
+    try:
+        from langchain_openai import ChatOpenAI as SummarizeChatOpenAI
+        summarizer_llm = SummarizeChatOpenAI(
+            model="gpt-5-nano",
+            api_key=settings.openai_api_key,
+        )
+        response = await summarizer_llm.ainvoke(
+            [SystemMessage(content="You are a conversation summarizer. Produce a concise factual summary."),
+             HumanMessage(content=prompt)]
+        )
+        new_summary = response.content
+    except Exception as e:
+        logger.error(f"[SummarizeNode] Summarization LLM call failed for User {user_id}: {e}", exc_info=True)
+        return {}
+
+    # Prune old messages from checkpointer via RemoveMessage
+    delete_messages = [RemoveMessage(id=m.id) for m in messages_to_summarize if hasattr(m, "id") and m.id]
+
+    logger.info(
+        f"[SummarizeNode] Summarization complete for User {user_id} | "
+        f"New summary length: {len(new_summary)} chars | "
+        f"Pruned {len(delete_messages)} old messages from state."
+    )
+
+    return {
+        "summary": new_summary,
+        "messages": delete_messages,
+    }
+
+
+def _route_after_agent(state: AgentState) -> str:
+    last = state["messages"][-1]
+    if isinstance(last, AIMessage) and getattr(last, "tool_calls", None):
+        return "tool_node"
+    return END
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # initialize_graph
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -576,10 +716,13 @@ async def initialize_graph() -> None:
         logger.info(f"Pre-bound {len(all_tools)} tools to {len(_bounded_models)} models")
 
         # Compile graph
+        #   START → summarize_node → agent_node → (tool_node ↔ agent_node)* → END
         builder = StateGraph(AgentState)
+        builder.add_node("summarize_node", summarize_conversation)
         builder.add_node("agent_node", agent_node)
         builder.add_node("tool_node", tool_node)
-        builder.add_edge(START, "agent_node")
+        builder.add_edge(START, "summarize_node")
+        builder.add_edge("summarize_node", "agent_node")
         builder.add_conditional_edges("agent_node", _route_after_agent)
         builder.add_edge("tool_node", "agent_node")
 
@@ -634,8 +777,16 @@ async def stream_response(user_message: str, thread_id: str, user_id: str, model
                 and event.get("metadata", {}).get("langgraph_node") == "agent_node"
             ):
                 chunk = event["data"].get("chunk")
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    yield ("token", chunk.content)
+                if chunk:
+                    reasoning_content = getattr(chunk, "reasoning_content", None)
+                    if not reasoning_content and hasattr(chunk, "additional_kwargs") and isinstance(chunk.additional_kwargs, dict):
+                        reasoning_content = chunk.additional_kwargs.get("reasoning_content") or chunk.additional_kwargs.get("thinking")
+                    
+                    if reasoning_content:
+                        yield ("token", [{"type": "reasoning", "reasoning": reasoning_content}])
+
+                    if hasattr(chunk, "content") and chunk.content:
+                        yield ("token", chunk.content)
             
             elif event["event"] == "on_custom_event" and event["name"] =="tool_activity":
                 yield ("activity", event["data"])
@@ -698,19 +849,26 @@ async def resume_response(thread_id: str, user_id: str, resume_value: dict):
                 and event.get("metadata", {}).get("langgraph_node") == "agent_node"
             ):
                 chunk = event["data"].get("chunk")
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    yield ("token", chunk.content)
-                elif event["event"] == "on_custom_event" and event["name"] == "tool_activity":
-                    yield ("activity", event["data"])
+                if chunk:
+                    reasoning_content = getattr(chunk, "reasoning_content", None)
+                    if not reasoning_content and hasattr(chunk, "additional_kwargs") and isinstance(chunk.additional_kwargs, dict):
+                        reasoning_content = chunk.additional_kwargs.get("reasoning_content") or chunk.additional_kwargs.get("thinking")
+                    
+                    if reasoning_content:
+                        yield ("token", [{"type": "reasoning", "reasoning": reasoning_content}])
+
+                    if hasattr(chunk, "content") and chunk.content:
+                        yield ("token", chunk.content)
             
-            #check for token useage
+            elif event["event"] == "on_custom_event" and event["name"] =="tool_activity":
+                yield ("activity", event["data"])
+            
             if event["event"] == "on_chat_model_end":
                 output = event["data"].get("output")
                 if output and hasattr(output, "usage_metadata") and output.usage_metadata:
                     total_tokens += output.usage_metadata.get("total_tokens", 0)
 
-
-        yield ("done", {"total_tokens": total_tokens})
+       
 
     except Exception as e:
         logger.error(
@@ -727,12 +885,12 @@ async def resume_response(thread_id: str, user_id: str, resume_value: dict):
             for task in snapshot.tasks:
                 if hasattr(task, "interrupts") and task.interrupts:
                     yield ("interrupt", task.interrupts[0].value)
-                    yield ("done", None)
+                    yield ("done", {"total_tokens": total_tokens})
                     return
     except Exception as e:
         logger.error(f"Post-resume interrupt detection failed thread={thread_id}: {e}")
 
-    yield ("done", None)
+    yield ("done", {"total_tokens": total_tokens})
 
 
 async def update_agent_state(
