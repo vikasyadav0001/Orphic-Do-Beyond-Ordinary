@@ -14,8 +14,6 @@ from db.models import Conversation, User, get_async_session
 from api.scalekit_auth import current_scalekit_active_user
 from api.auth import current_active_user
 from utils.logger import get_logger
-from orchestrators.graph import get_thread_state
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
@@ -93,7 +91,8 @@ async def get_conversation_messages(
     user: User = Depends(current_scalekit_active_user),
     session: AsyncSession = Depends(get_async_session)
 ):
-    """Fetch the chat history for a specific conversation from LangGraph."""
+    """Fetch the full chat history for a conversation from the chat_messages table.
+    This returns 100% of messages (never summarized), unlike the LangGraph checkpoint."""
     logger.info(f"Fetching messages for thread {thread_id} (user {user.id})")
     
     # 1. Verify ownership
@@ -105,22 +104,25 @@ async def get_conversation_messages(
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=403, detail="Conversation not found or unauthorized")
         
-    # 2. Load state from checkpointer
+    # 2. Load messages from chat_messages table (complete, unsummarized history)
     try:
-        state = await get_thread_state(thread_id, str(user.id))
+        from db.models import ChatMessage
+        msg_stmt = select(ChatMessage).where(
+            ChatMessage.conversation_id == thread_id
+        ).order_by(ChatMessage.created_at.asc())
+        msg_result = await session.execute(msg_stmt)
+        rows = msg_result.scalars().all()
+
         messages = []
-        if state and state.values and "messages" in state.values:
-            for msg in state.values["messages"]:
-                if isinstance(msg, HumanMessage):
-                    messages.append({"role": "user", "content": msg.content})
-                elif isinstance(msg, AIMessage):
-                    messages.append({"role": "assistant", "content": msg.content})
-                elif isinstance(msg, SystemMessage):
-                    messages.append({"role": "system", "content": msg.content})
+        for msg in rows:
+            entry = {"role": msg.role, "content": msg.content}
+            if msg.reasoning:
+                entry["reasoning"] = msg.reasoning
+            messages.append(entry)
         
         return {"messages": messages}
     except Exception as e:
-        logger.error(f"Error fetching state for thread {thread_id}: {e}")
+        logger.error(f"Error fetching messages for thread {thread_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch chat history")
 
 @router.patch("/{thread_id}", response_model=ConversationResponse)

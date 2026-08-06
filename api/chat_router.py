@@ -18,7 +18,7 @@ from api.scalekit_auth import current_scalekit_active_user
 from services.rate_limiter import check_chat_rate, log_token_usage
 from orchestrators.graph import stream_response, resume_response, update_agent_state, get_thread_state
 from api.auth import current_active_user
-from db.models import User, Conversation, get_async_session
+from db.models import User, Conversation, ChatMessage, get_async_session
 from schemas.stream_events import StreamEvent
 from utils.logger import get_logger
 
@@ -187,6 +187,23 @@ async def chat_stream(
                     )
 
                 await update_agent_state(session_id, user_id, [system_event])
+
+                # ── Also persist to chat_messages for UI history ──
+                # Use a lightweight version without Description to avoid
+                # duplication — the assistant response row stores the full text.
+                try:
+                    if is_image:
+                        ui_event_content = f"[Event: Image Uploaded] Name: {file.filename}{url_str}"
+                    else:
+                        ui_event_content = system_event.content
+                    db_session.add(ChatMessage(
+                        conversation_id=session_id, role="system",
+                        content=ui_event_content,
+                    ))
+                    await db_session.commit()
+                except Exception as db_err:
+                    logger.warning(f"Failed to persist system event to chat_messages: {db_err}")
+
             except Exception as e:
                 # Non-fatal: agent state update failing shouldn't abort the stream
                 logger.warning(f"Failed to update agent state: {e}", exc_info=True)
@@ -223,12 +240,55 @@ async def chat_stream(
                 except Exception as e:
                     logger.warning(f"Failed to persist AI response for file upload: {e}", exc_info=True)
 
+                # ── Also persist to chat_messages for UI history ──
+                try:
+                    db_session.add(ChatMessage(
+                        conversation_id=session_id, role="assistant",
+                        content=response_text,
+                    ))
+                    await db_session.commit()
+                except Exception as db_err:
+                    logger.warning(f"Failed to persist file assistant response to chat_messages: {db_err}")
+
 
         elif message:
             # ── CASE B + C: Message present (with or without file) ──
+
+            # ── Persist user message to chat_messages BEFORE agent runs (crash-safe) ──
+            try:
+                db_session.add(ChatMessage(
+                    conversation_id=session_id, role="user",
+                    content=message,
+                ))
+                await db_session.commit()
+            except Exception as db_err:
+                logger.warning(f"Failed to persist user message to chat_messages: {db_err}")
+
+            accumulated_text = []
+            accumulated_reasoning = []
+
             async for event_type, data in stream_response(message, session_id, user_id, model):
                 if event_type == "token":
                     yield sse("token", session_id, {"text": data})
+                    # Accumulate text + reasoning for post-stream persistence
+                    # chunk.content can be: str, dict, or list of dicts
+                    if isinstance(data, str):
+                        accumulated_text.append(data)
+                    elif isinstance(data, list):
+                        for part in data:
+                            if isinstance(part, dict):
+                                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                                    accumulated_text.append(part["text"])
+                                elif part.get("type") == "reasoning":
+                                    summary = part.get("summary")
+                                    if isinstance(summary, list):
+                                        for s in summary:
+                                            if isinstance(s, dict) and isinstance(s.get("text"), str):
+                                                accumulated_reasoning.append(s["text"])
+                                    elif isinstance(part.get("text"), str):
+                                        accumulated_reasoning.append(part["text"])
+                    elif isinstance(data, dict) and isinstance(data.get("text"), str):
+                        accumulated_text.append(data["text"])
                 elif event_type == "activity":
                     yield sse("activity", session_id, data)
                 elif event_type == "interrupt":
@@ -243,6 +303,22 @@ async def chat_stream(
                         await log_token_usage(user_id, tokens_used=token_used)
 
             logger.info("Agent stream completed.")
+
+            # ── Persist assistant response to chat_messages AFTER stream ends ──
+            full_response = "".join(accumulated_text)
+            full_reasoning = "".join(accumulated_reasoning)
+
+
+            if full_response or full_reasoning:
+                try:
+                    db_session.add(ChatMessage(
+                        conversation_id=session_id, role="assistant",
+                        content=full_response,
+                        reasoning=full_reasoning or None,
+                    ))
+                    await db_session.commit()
+                except Exception as db_err:
+                    logger.warning(f"Failed to persist assistant response to chat_messages: {db_err}")
 
             #strart memory
             asyncio.create_task(extract_memory(message, user_id))
@@ -321,10 +397,31 @@ async def resume_chat(
     }
 
     async def sse_generator():
+        accumulated_text = []
+        accumulated_reasoning = []
         try:
             async for event_type, data in resume_response(session_id, user_id, resume_value):
                 if event_type == "token":
                     yield sse("token", session_id, {"text": data})
+                    if isinstance(data, dict):
+                        parts = data.get("content", [])
+                        if isinstance(parts, list):
+                            for part in parts:
+                                if isinstance(part, dict):
+                                    if part.get("type") == "text" and isinstance(part.get("text"), str):
+                                        accumulated_text.append(part["text"])
+                                    elif part.get("type") == "reasoning":
+                                        summary = part.get("summary")
+                                        if isinstance(summary, list):
+                                            for s in summary:
+                                                if isinstance(s, dict) and isinstance(s.get("text"), str):
+                                                    accumulated_reasoning.append(s["text"])
+                                        elif isinstance(part.get("text"), str):
+                                            accumulated_reasoning.append(part["text"])
+                        elif isinstance(data.get("text"), str):
+                            accumulated_text.append(data["text"])
+                    elif isinstance(data, str):
+                        accumulated_text.append(data)
                 elif event_type == "activity":
                     yield sse("activity", session_id, data)
                 elif event_type == "interrupt":
@@ -333,6 +430,20 @@ async def resume_chat(
                     yield sse("error", session_id, {"message": data})
                 elif event_type == "done":
                     yield sse("done", session_id)
+
+            # Persist post-resume assistant message to chat_messages DB
+            full_response = "".join(accumulated_text)
+            full_reasoning = "".join(accumulated_reasoning)
+            if full_response or full_reasoning:
+                try:
+                    db_session.add(ChatMessage(
+                        conversation_id=session_id, role="assistant",
+                        content=full_response,
+                        reasoning=full_reasoning or None,
+                    ))
+                    await db_session.commit()
+                except Exception as db_err:
+                    logger.warning(f"Failed to persist resumed assistant response to chat_messages: {db_err}")
 
         except Exception as e:
             logger.error(

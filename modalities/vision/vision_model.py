@@ -64,8 +64,6 @@ async def analyse_image(image_path: str, user_id: str) -> tuple[str, bool]:
         Do not speculate, make assumptions, or hallucinate. Base your description strictly on what is visually verifiable in the image.
 
         At last ask the user 2-3 follow up questions, that what exactly they want to get described, and respond the output in sections not as generic text.
-        
-    and lastly tell your name,which model you are
     """
 
     try:
