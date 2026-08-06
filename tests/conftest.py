@@ -200,8 +200,7 @@ async def app_with_test_db(test_engine):
          patch("orchestrators.graph.get_thread_state", mock_get_thread_state), \
          patch("api.chat_router.stream_response", side_effect=fake_stream_response), \
          patch("api.chat_router.resume_response", side_effect=fake_resume_response), \
-         patch("api.chat_router.update_agent_state", mock_update_state), \
-         patch("api.conversations.get_thread_state", mock_get_thread_state):
+         patch("api.chat_router.update_agent_state", mock_update_state):
         # Also mock the document/image pipeline so chat_router doesn't try to load files
         with patch("api.chat_router.doc_pipeline", new=MagicMock(
             ainvoke=AsyncMock(return_value={
