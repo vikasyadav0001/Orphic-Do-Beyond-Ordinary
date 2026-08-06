@@ -70,6 +70,24 @@ class Conversation(Base):
 
     user: Mapped["User"] = relationship(back_populates="conversations")
 
+class ChatMessage(Base):
+    """Stores every user/assistant/system message for UI history display.
+    Independent of LangGraph checkpoints — never summarized or truncated."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(
+        String, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String, nullable=False)  # "user", "assistant", "system"
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    conversation: Mapped["Conversation"] = relationship()
+
+
 class UserConnection(Base):
     """Tracks which external providers(tools) a user has successfully connected."""
 
