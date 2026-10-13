@@ -432,5 +432,7 @@ async def list_emails(
 
     return json.dumps(results, indent=2)
 
-custom_tools = [send_email, list_emails, search_uploaded_documents, extract_full_text, compute_on_csv_or_excel]
+from tools.search_tools import search_tools
+
+custom_tools = [send_email, list_emails, search_uploaded_documents, extract_full_text, compute_on_csv_or_excel, search_tools]
 

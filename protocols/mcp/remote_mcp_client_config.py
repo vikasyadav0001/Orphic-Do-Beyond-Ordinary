@@ -27,7 +27,7 @@ import os
 import logging
 from typing import Any, Optional, Union, List
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, create_model, ConfigDict
 from pydantic.fields import FieldInfo
 from langchain_core.tools import StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -170,7 +170,7 @@ def _build_args_model(tool_name: str, input_schema: dict) -> type[BaseModel] | N
     try:
         # Sanitize model name — Pydantic requires valid Python identifier
         safe_name = "".join(c if c.isalnum() else "_" for c in tool_name) + "_args"
-        return create_model(safe_name, **fields)
+        return create_model(safe_name, __config__=ConfigDict(protected_namespaces=()), **fields)
     except Exception as e:
         logger.warning(f"Failed to build args model for '{tool_name}': {e}")
         return None

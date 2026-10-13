@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, update
 from typing import List
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import uuid
 
 from db.models import Conversation, User, get_async_session
@@ -24,8 +24,7 @@ class ConversationResponse(BaseModel):
     title: str
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ConversationCreate(BaseModel):
     title: str = "New Chat"

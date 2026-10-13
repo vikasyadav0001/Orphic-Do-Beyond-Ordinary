@@ -42,6 +42,9 @@ if DB_URL.startswith("postgresql://"):
 
 engine = create_async_engine(
     DB_URL,
+    pool_size=5,
+    max_overflow=2,
+    pool_recycle=300,
     pool_pre_ping=True,
     connect_args={"timeout": 60}
 )
@@ -57,6 +60,7 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     conversations: Mapped[list["Conversation"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     connections: Mapped[list["UserConnection"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     workflows: Mapped[list["Workflows"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    mcp_config: Mapped[Optional["UserMCPConfig"]] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 class Conversation(Base):
     """Maps a langgraph thread id to specific user"""
@@ -106,7 +110,22 @@ class UserConnection(Base):
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="connections")
-    
+
+class UserMCPConfig(Base):
+    """Stores per-user MCP server configuration for dynamic tool registration."""
+
+    __tablename__ = "user_mcp_configs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="mcp_config")
+
 class Workflows(Base):
     __tablename__ = "user_workflows"
 

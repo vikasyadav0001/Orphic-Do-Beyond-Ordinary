@@ -133,11 +133,32 @@ async def app_with_test_db(test_engine):
     app.dependency_overrides[current_scalekit_active_user] = _override_scalekit_user
 
     class _FakeRedis:
+        def __init__(self):
+            self.store = {}
+
         async def ping(self):
             return True
 
         async def aclose(self):
             return None
+
+        async def get(self, key):
+            return self.store.get(key)
+
+        async def set(self, key, value, ex=None, px=None, nx=False, xx=False):
+            self.store[key] = value
+            return True
+
+        async def delete(self, *keys):
+            count = 0
+            for k in keys:
+                if k in self.store:
+                    del self.store[k]
+                    count += 1
+            return count
+
+        async def eval(self, script, numkeys, *keys_and_args):
+            return 1
 
     # ── Mock the new graph.py public API ──────────────────────────────────
 

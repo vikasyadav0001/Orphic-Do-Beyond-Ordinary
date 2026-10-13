@@ -9,6 +9,7 @@ from api.chat_router import router
 from api.conversations import router as conversations_router
 from api.connections_router import router as connections_router
 from api.workflows_router import router as workflows_router
+from api.mcp_config_router import router as mcp_config_router
 
 
 from api.auth import fastapi_users, auth_backend, UserRead, UserCreate, current_active_user
@@ -131,6 +132,7 @@ app.include_router(workflows_router)
 app.include_router(router)
 app.include_router(conversations_router)
 app.include_router(connections_router)
+app.include_router(mcp_config_router)
 
 @app.get("/")
 def welcome():

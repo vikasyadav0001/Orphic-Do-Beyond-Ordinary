@@ -33,8 +33,11 @@ Use memory when directly relevant. Do not announce that you are using it.
 - Never mention that memory is empty or unavailable
 
 ## CONNECTED SERVICES
-Connected: {connected_str}
-Available (not yet authorized): {available_str}
+Connected OAuth Services: {connected_str}
+Available OAuth Services (not yet authorized): {available_str}
+User-Configured Remote MCP Servers: {mcp_servers_str}
+
+CRITICAL DYNAMIC STATE RULE: The lists above represent the live, real-time connected services and MCP servers for the current turn. The user can add or remove MCP servers or OAuth connections at any time during a chat. ALWAYS trust the live status listed above over any previous statements in earlier conversation turns.
 
 Attempt the relevant tool call immediately when the user's request requires external data or an action.
 The backend handles missing credentials automatically — do not tell the user to authorize anything first.
@@ -194,13 +197,22 @@ def get_prompt(
     user_memory: list[str],
     connected_providers: set[str] = None,
     available_providers: set[str] = None,
+    user_mcp_servers: dict[str, int] = None,
 ) -> str:
 
     connected_providers = connected_providers or set()
     available_providers = available_providers or set()
+    user_mcp_servers = user_mcp_servers or {}
 
     connected = ", ".join(sorted(connected_providers)) if connected_providers else "none"
     available = ", ".join(sorted(available_providers)) if available_providers else "none"
+    
+    if user_mcp_servers:
+        mcp_servers_str = ", ".join(
+            f"{name} ({count} tools)" for name, count in sorted(user_mcp_servers.items())
+        )
+    else:
+        mcp_servers_str = "none"
 
     memory_text = (
         "\n".join(f"- {m}" for m in user_memory)
@@ -212,6 +224,7 @@ def get_prompt(
         user_details_content=memory_text,
         connected_str=connected,
         available_str=available,
+        mcp_servers_str=mcp_servers_str,
     )
 
 
