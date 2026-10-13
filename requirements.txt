@@ -37,6 +37,7 @@ pymupdf4llm
 langchain-pymupdf4llm
 setuptools==82.0.1
 scalekit-sdk-python==2.15.0
+rank-bm25
 
 # ── API Framework ────────────────────────────────────────────────
 fastapi[standard]
@@ -46,7 +47,8 @@ python-jose[cryptography]  # JWT auth tokens
 passlib[bcrypt]            # password hashing
 fastapi-users[sqlalchemy]
 fastapi-users-db-sqlalchemy
-
+qdrant-client
+fastembed
 # ─ Production WSGI/ASGI process manager ────────────────────────────────────────────────────────
 gunicorn 
 

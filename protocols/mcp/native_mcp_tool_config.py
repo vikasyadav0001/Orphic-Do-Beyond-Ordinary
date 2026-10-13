@@ -18,13 +18,11 @@ logger = get_logger(__name__)
 
 # Retrieve tokens from settings
 EXA_API_KEY = settings.exa_api_key
-FIRECRAWL_API_KEY =None
 N8N_MCP_TOKEN =settings.n8n_mcp_token
 BROWSERLESS_API_KEY=None
 
 
 missing = [k for k, v in {
-    "FIRECRAWL_API_KEY": FIRECRAWL_API_KEY,
     "EXA_API_KEY": EXA_API_KEY,
     "N8N_TOKEN": N8N_MCP_TOKEN,
     "BROWSERLESS_API_KEY": BROWSERLESS_API_KEY,
@@ -37,13 +35,6 @@ if missing:
 # Defined here as a plain dict — the actual client is built inside the async
 # function below, NOT at module level.
 MCP_CONFIG = {}
-
-if FIRECRAWL_API_KEY:
-    MCP_CONFIG["firecrawl"] = {
-        "transport": "http",
-        "url": "https://mcp.firecrawl.dev/v2/mcp",
-        "headers": {"Authorization": f"Bearer {FIRECRAWL_API_KEY}"},
-    }
 
 if EXA_API_KEY:
     MCP_CONFIG["exa"] = {

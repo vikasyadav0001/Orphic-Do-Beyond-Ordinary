@@ -205,3 +205,81 @@ async def pop_oauth_state(state:str) -> str | None:
 # async def cache_tool_result(user_id: str, cache_key: str, result: str, ttl: int = 120):
 #     redis = await get_redis()
 #     await redis.set(f"tool_result:{user_id}:{cache_key}", result, ex=ttl)
+
+
+# ── MCP Config Cache ─────────────────────────────────────────────────────
+# Three keys per user:
+#   mcp_config_version:{user_id} — MD5 hash of config_json (no TTL, explicit invalidation)
+#   mcp_config:{user_id}         — the raw config_json dict (TTL 3600s)
+#   mcp_tool_schemas:{user_id}   — discovered tool schemas list (TTL 3600s)
+
+async def get_mcp_config_version(user_id: str) -> str | None:
+    """Returns the MD5 hash of the user's MCP config, or None if no config exists."""
+    redis = await get_redis()
+    return await redis.get(f"mcp_config_version:{user_id}")
+
+
+async def set_mcp_config_version(user_id: str, version_hash: str) -> None:
+    """Store the config version hash. No TTL — only cleared on config change or deletion."""
+    redis = await get_redis()
+    await redis.set(f"mcp_config_version:{user_id}", version_hash)
+    logger.debug(f"Set MCP config version for user {user_id}")
+
+
+async def invalidate_mcp_config(user_id: str) -> None:
+    """Delete ALL MCP cache keys for a user. Called on config update or deletion."""
+    redis = await get_redis()
+    await redis.delete(
+        f"mcp_config_version:{user_id}",
+        f"mcp_config:{user_id}",
+        f"mcp_tool_schemas:{user_id}",
+    )
+    from services.tool_retriever import tool_retriever_service
+    tool_retriever_service.invalidate_user_mcp_cache(user_id)
+    from services.vector_tool_retriever import vector_tool_retriever_service
+    vector_tool_retriever_service.invalidate_user_cache(user_id)
+    logger.debug(f"Invalidated all MCP cache for user {user_id}")
+
+
+async def get_cached_mcp_config(user_id: str) -> dict | None:
+    """Returns the cached config_json dict, or None on miss."""
+    redis = await get_redis()
+    raw = await redis.get(f"mcp_config:{user_id}")
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"Corrupt MCP config cache for user {user_id}")
+        return None
+
+
+async def set_cached_mcp_config(user_id: str, config: dict, ttl: int | None = None) -> None:
+    """Cache the config_json dict permanently (or with optional TTL)."""
+    redis = await get_redis()
+    if ttl:
+        await redis.set(f"mcp_config:{user_id}", json.dumps(config), ex=ttl)
+    else:
+        await redis.set(f"mcp_config:{user_id}", json.dumps(config))
+
+
+async def get_cached_mcp_tool_schemas(user_id: str) -> list[dict] | None:
+    """Returns the cached tool schemas list, or None on miss."""
+    redis = await get_redis()
+    raw = await redis.get(f"mcp_tool_schemas:{user_id}")
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"Corrupt MCP tool schemas cache for user {user_id}")
+        return None
+
+
+async def set_cached_mcp_tool_schemas(user_id: str, schemas: list[dict], ttl: int | None = None) -> None:
+    """Cache the discovered tool schemas permanently (or with optional TTL)."""
+    redis = await get_redis()
+    if ttl:
+        await redis.set(f"mcp_tool_schemas:{user_id}", json.dumps(schemas), ex=ttl)
+    else:
+        await redis.set(f"mcp_tool_schemas:{user_id}", json.dumps(schemas))
